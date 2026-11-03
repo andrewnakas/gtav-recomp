@@ -1,0 +1,87 @@
+
+name: Mali Android APK Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            clang \
+            lld \
+            python3 \
+            openjdk-17-jdk \
+            git \
+            wget \
+            unzip \
+            zip \
+            pkg-config
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          sdkmanager "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Check Android scripts
+        run: |
+          chmod +x tools/android/*.sh
+          test -f tools/android/build_apk.sh
+          test -f tools/android/build_sdk.sh
+
+      - name: Build Android SDK
+        run: |
+          mkdir -p "$HOME/android-tools"
+          cat > "$HOME/android-tools/env.sh" <<EOF
+          export JAVA_HOME="$JAVA_HOME"
+          export ANDROID_HOME="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/36.0.0:$PATH"
+          EOF
+          source "$HOME/android-tools/env.sh"
+          tools/android/build_sdk.sh all
+
+      - name: Build APK
+        run: |
+          source "$HOME/android-tools/env.sh"
+          tools/android/build_apk.sh
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mali-Android-APK
+          path: |
+            android/*.apk
+            dist/android/*.apk
+            build/**/*.apk
+          if-no-files-found: warn
