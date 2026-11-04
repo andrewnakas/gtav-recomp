@@ -2812,7 +2812,7 @@ index 3ea3535..edb6ec4 100644
      nop/nop_input_driver.cpp
  )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index 813bb1c..14fd47d 100644
+index 813bb1c..36b32ae 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -10,13 +10,19 @@
@@ -2835,7 +2835,7 @@ index 813bb1c..14fd47d 100644
  #include <rex/input/mnk/mnk_input_driver.h>
  #include <rex/input/nop/nop_input_driver.h>
  #include <rex/input/sdl/sdl_input_driver.h>
-@@ -28,10 +34,82 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
+@@ -28,10 +34,93 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
      .allowed({"sdl", "xinput"});
  
  REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
@@ -2859,15 +2859,25 @@ index 813bb1c..14fd47d 100644
 +    const std::string& path = REXCVAR_GET(input_script);
 +    if (path.empty()) return false;
 +    const auto now = std::chrono::steady_clock::now();
-+    if (steps_.empty()) {
-+      if (now < next_check_) return false;
++    // Checked once a second: a rewritten file restarts the script from its new steps (so a
++    // capture script can drive a run step by step), a deleted one hands input back to the pads.
++    if (now >= next_check_) {
 +      next_check_ = now + std::chrono::seconds(1);
-+      if (!std::filesystem::exists(path)) return false;
-+      Load(path);
-+      if (steps_.empty()) return false;
-+      start_ = now;
-+      REXLOG_INFO("input script: {} steps, loop {:.1f} s", steps_.size(), length_);
++      std::error_code ec;
++      const auto stamp = std::filesystem::last_write_time(path, ec);
++      if (ec) {
++        steps_.clear();
++        loaded_stamp_ = {};
++      } else if (stamp != loaded_stamp_) {
++        loaded_stamp_ = stamp;
++        steps_.clear();
++        length_ = 0;
++        Load(path);
++        start_ = now;
++        REXLOG_INFO("input script: {} steps, loop {:.1f} s", steps_.size(), length_);
++      }
 +    }
++    if (steps_.empty()) return false;
 +    const double t = std::fmod(std::chrono::duration<double>(now - start_).count(), length_);
 +    X_INPUT_GAMEPAD pad = {};
 +    for (const Step& s : steps_) {
@@ -2913,12 +2923,13 @@ index 813bb1c..14fd47d 100644
 +  double length_ = 0;
 +  uint32_t packet_ = 0;
 +  std::chrono::steady_clock::time_point start_, next_check_;
++  std::filesystem::file_time_type loaded_stamp_{};
 +};
 +
  // Synthetic devices are parked past every physical ordinal so they cannot push
  // a real pad off guest user 0. SlotAssignment routes them by their synthetic
  // flag and never reads this value.
-@@ -187,6 +265,7 @@ const DeviceInfo* InputSystem::DeviceInfoFor(DeviceId id) const {
+@@ -187,6 +276,7 @@ const DeviceInfo* InputSystem::DeviceInfoFor(DeviceId id) const {
  X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
                                        X_INPUT_CAPABILITIES* out_caps) {
    SCOPE_profile_cpu_f("hid");
@@ -2926,7 +2937,7 @@ index 813bb1c..14fd47d 100644
    if (!out_caps || !assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -195,6 +274,17 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
+@@ -195,6 +285,17 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
    if (ids.empty()) {
@@ -2944,7 +2955,7 @@ index 813bb1c..14fd47d 100644
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
  
-@@ -214,6 +304,14 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
+@@ -214,6 +315,14 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
  
  X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    SCOPE_profile_cpu_f("hid");
@@ -2959,7 +2970,7 @@ index 813bb1c..14fd47d 100644
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -233,6 +331,9 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -233,6 +342,9 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
      if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
        continue;
      }
@@ -2969,7 +2980,7 @@ index 813bb1c..14fd47d 100644
      active_devices_.Observe(user_index, id, state.gamepad);
      if (!any) {
        merged = state;
-@@ -253,6 +354,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -253,6 +365,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
  
  X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
    SCOPE_profile_cpu_f("hid");
@@ -2977,7 +2988,7 @@ index 813bb1c..14fd47d 100644
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -295,6 +397,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -295,6 +408,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
  X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                     X_INPUT_KEYSTROKE* out_keystroke) {
    SCOPE_profile_cpu_f("hid");

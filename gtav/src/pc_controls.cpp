@@ -14,6 +14,7 @@
 
 #include "pc_controls.h"
 
+#include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/logging.h>
@@ -33,6 +34,9 @@
 #include <initializer_list>
 #include <string_view>
 #include <thread>
+#include <filesystem>
+#include <fstream>
+#include "native/paths.h"
 
 REX_EXTERN(__imp__sub_82CE9CA8);  // PLAYER_PED_ID
 REX_EXTERN(sub_82D0BF30);         // IS_PED_IN_ANY_VEHICLE(ped, include_entering)
@@ -49,6 +53,11 @@ REX_EXTERN(sub_82C835F0);         // IS_PAUSE_MENU_ACTIVE()
 REX_EXTERN(sub_82D57A40);         // GET_SELECTED_PED_WEAPON(ped)
 REX_EXTERN(sub_82D5C080);         // HAS_PED_GOT_WEAPON(ped, hash, 0)
 REX_EXTERN(sub_82D5BFD0);         // SET_CURRENT_PED_WEAPON(ped, hash, equip_now)
+REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
+
+REXCVAR_DEFINE_BOOL(gtav_debug_commands, false, "GTAV",
+                    "Test hook: <exe>/logs/native_cmd is run on the script thread once per second "
+                    "('kill' = SET_ENTITY_HEALTH(player, 0)) and deleted");
 
 namespace {
 
@@ -215,6 +224,21 @@ REX_HOOK_RAW(sub_82CE9CA8) {
       static const char* kNames[] = {"on foot", "car", "motorbike", "bicycle", "aircraft",
                                      "boat",    "submarine", "parachute", "pause menu"};
       REXLOG_INFO("[controls] {} layout", kNames[int(context)]);
+    }
+    if (REXCVAR_GET(gtav_debug_commands)) {
+      static auto next = now;
+      if (now >= next) {
+        next = now + std::chrono::seconds(1);
+        const auto path = gtav::native::ExeDir() / "logs" / "native_cmd";
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
+          std::string cmd;
+          std::ifstream(path) >> cmd;
+          std::filesystem::remove(path, ec);
+          REXLOG_INFO("[controls] debug command '{}'", cmd);
+          if (cmd == "kill") Call(ctx, base, sub_82C9C078, {ped, 0});
+        }
+      }
     }
     for (; request; request = rex::input::mnk::TakeWeaponRequest())
       if (context == InputContext::kOnFoot && request <= rex::input::mnk::kWeaponPrevious) Select(ctx, base, ped, request);
