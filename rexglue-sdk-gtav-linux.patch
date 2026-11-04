@@ -231,10 +231,10 @@ index 1cb3faa..a68b9cc 100644
  
  /// Create a default InputSystem with SDL + NOP drivers.
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
-index c8751b7..4be578f 100644
+index c8751b7..9feecb8 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
 +++ b/include/rex/input/mnk/mnk_input_driver.h
-@@ -15,6 +15,7 @@
+@@ -15,15 +15,54 @@
  #include <rex/ui/window_listener.h>
  
  #include <atomic>
@@ -242,7 +242,11 @@ index c8751b7..4be578f 100644
  #include <cstdint>
  #include <mutex>
  #include <queue>
-@@ -24,6 +25,24 @@ namespace rex::input::mnk {
+ #include <string>
++#include <utility>
++#include <vector>
+ 
+ namespace rex::input::mnk {
  
  void SetMouseLookActive(bool active);
  bool IsMouseLookActive();
@@ -259,15 +263,33 @@ index c8751b7..4be578f 100644
 +// Pause menu / frontend open (scripts stop while paused, so the title reports it separately).
 +void SetFrontendActive(bool active);
 +
++// What a key binding drives: a pad control, or (past kRSRight) an action the driver or the title
++// performs. Order is part of the API (the title's saved bindings use the names, not the values).
++enum class PadOutput : int {
++  kA, kB, kX, kY, kLB, kRB, kL3, kR3, kBack, kStart, kDUp, kDDown, kDLeft, kDRight,
++  kLT, kRT, kLSLeft, kLSRight, kLSUp, kLSDown, kRSUp, kRSDown, kRSLeft, kRSRight, kBothSticks,
++  kWeaponNext, kWeaponPrevious,
++  kWeaponUnarmed, kWeaponMelee, kWeaponShotgun, kWeaponHeavy, kWeaponSpecial, kWeaponPistol,
++  kWeaponSmg, kWeaponRifle, kWeaponSniper,
++  kSwitchMichael, kSwitchFranklin, kSwitchTrevor,
++  kVehicleWeaponNext, kAircraftWeaponNext, kScrollUp, kScrollDown,
++  kCount
++};
++// Bindings of one InputContext (as int), or of everything but the pause menu (table 9). Keys: the
++// keybind syntax ("Shift", "LMB", "WheelUp", "Ctrl+X", alternatives comma-separated). Replaces the
++// built-in PC defaults for that table. Any thread.
++void SetContextBindings(int table, std::vector<std::pair<std::string, PadOutput>> binds);
++// Mouse look per context: sensitivity factor (0 = unchanged) and inverted vertical axis.
++void SetMouseOptions(InputContext context, float scale, bool invert);
++
 +// PC actions the console pad has no button for, carried out by the title: the next request, or 0.
 +// 1-9 = weapon category key, kWeaponNext / kWeaponPrevious = mouse wheel, kSwitch* = F5-F7.
 +constexpr int kWeaponNext = 100, kWeaponPrevious = 101;
-+constexpr int kSwitchMichael = 110, kSwitchFranklin = 111, kSwitchTrevor = 112;
 +int TakeWeaponRequest();
  
  class MnkInputDriver final : public InputDriver,
                               public rex::ui::WindowInputListener,
-@@ -50,6 +69,7 @@ class MnkInputDriver final : public InputDriver,
+@@ -50,6 +89,7 @@ class MnkInputDriver final : public InputDriver,
    void OnMouseDown(rex::ui::MouseEvent& e) override;
    void OnMouseUp(rex::ui::MouseEvent& e) override;
    void OnMouseMove(rex::ui::MouseEvent& e) override;
@@ -275,7 +297,7 @@ index c8751b7..4be578f 100644
  
    // WindowListener
    void OnClosing(rex::ui::UIEvent& e) override;
-@@ -60,6 +80,7 @@ class MnkInputDriver final : public InputDriver,
+@@ -60,6 +100,7 @@ class MnkInputDriver final : public InputDriver,
    bool IsEnabled() const;
    void SetKeyState(uint16_t vk, bool down);
    void EnqueueKeystroke(uint16_t vk_pad, bool down);
@@ -283,7 +305,7 @@ index c8751b7..4be578f 100644
  
    // Called from the guest thread. The rest of the capture path stays on the UI
    // thread, since every Window call in it reaches SDL.
-@@ -75,6 +96,15 @@ class MnkInputDriver final : public InputDriver,
+@@ -75,6 +116,15 @@ class MnkInputDriver final : public InputDriver,
  
    std::mutex state_mutex_;
    bool key_down_[256] = {};
@@ -291,14 +313,46 @@ index c8751b7..4be578f 100644
 +  int32_t wheel_accum_ = 0;
 +  int32_t rs_pulse_y_ = 0;
 +  std::chrono::steady_clock::time_point pulse_until_[32] = {};
-+  bool number_down_[10] = {};
-+  bool switch_down_[3] = {};
++  bool special_down_[64] = {};
++  int32_t rs_pulse_x_ = 0;
 +  std::chrono::steady_clock::time_point switch_start_{};  // F5-F7 character switch in progress
 +  int switch_target_ = 0;
 +  int32_t switch_stick_x_ = 0, switch_stick_y_ = 0;
  
    // Mouse delta tracking. Fractional because relative motion arrives in
    // fractions of a pixel, and truncating each event drops slow movement.
+diff --git a/include/rex/input/pad_remap.h b/include/rex/input/pad_remap.h
+new file mode 100644
+index 0000000..2ef7571
+--- /dev/null
++++ b/include/rex/input/pad_remap.h
+@@ -0,0 +1,26 @@
++/**
++ * @file        input/pad_remap.h
++ * @brief       Remapping of real controllers' buttons and triggers (title settings).
++ */
++#pragma once
++
++#include <array>
++#include <cstdint>
++
++#include <rex/input/input.h>
++
++namespace rex::input {
++
++// The remappable controls of a pad, in this order.
++enum PadControl : uint8_t {
++  kPadA, kPadB, kPadX, kPadY, kPadLB, kPadRB, kPadL3, kPadR3, kPadBack, kPadStart,
++  kPadDUp, kPadDDown, kPadDLeft, kPadDRight, kPadLT, kPadRT, kPadControlCount
++};
++
++// map[physical] = what the game sees; identity = no remap. Any thread.
++void SetPadRemap(const std::array<uint8_t, kPadControlCount>& map);
++
++// Applies the remap to one real pad's state (InputSystem, synthetic devices excluded).
++void ApplyPadRemap(X_INPUT_STATE& state);
++
++}  // namespace rex::input
 diff --git a/include/rex/platform.h b/include/rex/platform.h
 index e90418d..9f5d0f8 100644
 --- a/include/rex/platform.h
@@ -2745,11 +2799,23 @@ index 6788214..dbe172a 100644
    buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
    buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+index 3ea3535..edb6ec4 100644
+--- a/src/input/CMakeLists.txt
++++ b/src/input/CMakeLists.txt
+@@ -5,6 +5,7 @@ add_library(rexinput OBJECT
+     input_system.cpp
+     device_assignment.cpp
+     state_merge.cpp
++    pad_remap.cpp
+     mnk/mnk_input_driver.cpp
+     nop/nop_input_driver.cpp
+ )
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index 813bb1c..bf17297 100644
+index 813bb1c..14fd47d 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
-@@ -10,7 +10,12 @@
+@@ -10,13 +10,19 @@
   */
  
  #include <algorithm>
@@ -2762,7 +2828,14 @@ index 813bb1c..bf17297 100644
  
  #include <rex/dbg.h>
  #include <rex/input/device_assignment.h>
-@@ -28,10 +33,82 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
+ #include <rex/input/flags.h>
+ #include <rex/input/input_driver.h>
+ #include <rex/input/input_system.h>
++#include <rex/input/pad_remap.h>
+ #include <rex/input/mnk/mnk_input_driver.h>
+ #include <rex/input/nop/nop_input_driver.h>
+ #include <rex/input/sdl/sdl_input_driver.h>
+@@ -28,10 +34,82 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
      .allowed({"sdl", "xinput"});
  
  REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
@@ -2845,7 +2918,7 @@ index 813bb1c..bf17297 100644
  // Synthetic devices are parked past every physical ordinal so they cannot push
  // a real pad off guest user 0. SlotAssignment routes them by their synthetic
  // flag and never reads this value.
-@@ -187,6 +264,7 @@ const DeviceInfo* InputSystem::DeviceInfoFor(DeviceId id) const {
+@@ -187,6 +265,7 @@ const DeviceInfo* InputSystem::DeviceInfoFor(DeviceId id) const {
  X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
                                        X_INPUT_CAPABILITIES* out_caps) {
    SCOPE_profile_cpu_f("hid");
@@ -2853,7 +2926,7 @@ index 813bb1c..bf17297 100644
    if (!out_caps || !assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -195,6 +273,17 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
+@@ -195,6 +274,17 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
    std::vector<DeviceId> ids;
    assignment_->DevicesForUser(user_index, ids);
    if (ids.empty()) {
@@ -2871,7 +2944,7 @@ index 813bb1c..bf17297 100644
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
  
-@@ -214,6 +303,14 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
+@@ -214,6 +304,14 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
  
  X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
    SCOPE_profile_cpu_f("hid");
@@ -2886,7 +2959,17 @@ index 813bb1c..bf17297 100644
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -253,6 +350,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -233,6 +331,9 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
+       continue;
+     }
++    if (const DeviceInfo* info = DeviceInfoFor(id); info && !info->synthetic) {
++      ApplyPadRemap(state);  // the title's controller remap (real pads only)
++    }
+     active_devices_.Observe(user_index, id, state.gamepad);
+     if (!any) {
+       merged = state;
+@@ -253,6 +354,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
  
  X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
    SCOPE_profile_cpu_f("hid");
@@ -2894,7 +2977,7 @@ index 813bb1c..bf17297 100644
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-@@ -295,6 +393,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -295,6 +397,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
  X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                     X_INPUT_KEYSTROKE* out_keystroke) {
    SCOPE_profile_cpu_f("hid");
@@ -2903,7 +2986,7 @@ index 813bb1c..bf17297 100644
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..891df72 100644
+index 3f9422d..f97452a 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
 @@ -22,6 +22,9 @@
@@ -2973,7 +3056,17 @@ index 3f9422d..891df72 100644
  
  namespace rex::input::mnk {
  
-@@ -123,8 +129,10 @@ std::string_view TrimSpaces(std::string_view s) {
+@@ -71,6 +77,9 @@ constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x
+ // it. That is what lets the D-pad share the arrow keys. A consequence is
+ // that binding a bare modifier name ("Shift") can never fire, since holding it
+ // makes the live mask non-zero while the bind wants zero.
++// Unassigned virtual-key codes standing for one mouse wheel detent (PC binds "WheelUp/WheelDown").
++constexpr uint16_t kWheelUpKey = 0x0E;
++constexpr uint16_t kWheelDownKey = 0x0F;
+ constexpr uint8_t kModShift = 1u << 0;
+ constexpr uint8_t kModCtrl = 1u << 1;
+ constexpr uint8_t kModAlt = 1u << 2;
+@@ -123,10 +132,14 @@ std::string_view TrimSpaces(std::string_view s) {
  }
  
  bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
@@ -2984,8 +3077,12 @@ index 3f9422d..891df72 100644
 +  if ((want & live_mods) != want) {
      return false;
    }
++  if (token == "WheelUp") return key_down[kWheelUpKey];
++  if (token == "WheelDown") return key_down[kWheelDownKey];
    rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
-@@ -136,6 +144,11 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
+   if (vk == rex::ui::VirtualKey::kNone) {
+     return false;
+@@ -136,6 +149,11 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
  }
  
  std::atomic<bool> mouse_look_active{true};
@@ -2997,7 +3094,7 @@ index 3f9422d..891df72 100644
  
  }  // namespace
  
-@@ -143,6 +156,88 @@ void SetMouseLookActive(bool active) {
+@@ -143,6 +161,91 @@ void SetMouseLookActive(bool active) {
    mouse_look_active.store(active, std::memory_order_relaxed);
  }
  
@@ -3033,60 +3130,63 @@ index 3f9422d..891df72 100644
 +  if (weapon_requests.size() < 8) weapon_requests.push_back(r);
 +}
 +
-+// Pad outputs a PC key can drive.
-+enum Out : uint8_t {
-+  kA, kB, kX, kY, kLB, kRB, kL3, kR3, kBack, kStart, kDUp, kDDown, kDLeft, kDRight,
-+  kLT, kRT, kLSLeft, kLSRight, kLSUp, kLSDown, kRSUp, kRSDown, kBothSticks, kOutCount
-+};
++using rex::input::mnk::PadOutput;
++constexpr int kOutCount = int(PadOutput::kCount);
++
 +struct Bind {
 +  const char* keys;
-+  Out out;
++  PadOutput out;
 +};
-+// GTA V on PC, default keyboard/mouse bindings per input action, and the pad button the same
-+// action has (docs.fivem.net/docs/game-references/controls). Context first, shared after.
-+constexpr Bind kShared[] = {
-+    {"V", kBack}, {"P,Escape", kStart}, {"Up,MMB", kDUp}, {"Alt,Z,Down", kDDown}, {"C", kR3},
-+    {"Return", kA}, {"Backspace", kB}, {"Delete", kY}, {"Left", kDLeft}, {"Right", kDRight},
++using O = PadOutput;
++// Fallback when the title sets no bindings: GTA V on PC's default keys per input action, as the
++// pad button the action has (docs.fivem.net/docs/game-references/controls).
++constexpr Bind kSharedDefault[] = {
++    {"V", O::kBack}, {"P,Escape", O::kStart}, {"Up,MMB", O::kDUp}, {"Alt,Z,Down", O::kDDown}, {"C", O::kR3},
++    {"Return", O::kA}, {"Backspace", O::kB}, {"Delete", O::kY}, {"Left", O::kDLeft}, {"Right", O::kDRight},
 +};
-+constexpr Bind kFoot[] = {
-+    {"W", kLSUp}, {"S", kLSDown}, {"A", kLSLeft}, {"D", kLSRight}, {"Shift", kA}, {"Space", kX},
-+    {"F", kY}, {"LMB", kRT}, {"RMB", kLT}, {"R", kB}, {"Q", kRB}, {"E", kDRight}, {"G", kDLeft},
-+    {"Tab", kLB}, {"Control", kL3}, {"RBracket", kLSUp}, {"LBracket", kLSDown}, {"CapsLock", kBothSticks},
++constexpr Bind kFootDefault[] = {
++    {"W", O::kLSUp}, {"S", O::kLSDown}, {"A", O::kLSLeft}, {"D", O::kLSRight}, {"Shift", O::kA},
++    {"Space", O::kX}, {"F", O::kY}, {"LMB", O::kRT}, {"RMB", O::kLT}, {"R", O::kB}, {"Q", O::kRB},
++    {"E", O::kDRight}, {"G", O::kDLeft}, {"Tab", O::kLB}, {"Control", O::kL3}, {"CapsLock", O::kBothSticks},
++    {"WheelDown", O::kWeaponNext}, {"WheelUp", O::kWeaponPrevious},
 +};
-+constexpr Bind kCar[] = {  // cars, motorbikes, boats, trains
-+    {"W", kRT}, {"S", kLT}, {"A", kLSLeft}, {"D", kLSRight}, {"Shift", kLSUp}, {"Control", kLSDown},
-+    {"Space,LMB", kRB}, {"RMB", kLB}, {"X", kA}, {"F", kY}, {"E", kL3}, {"H", kDRight}, {"Q", kDLeft},
-+    {"R", kB}, {"CapsLock", kBothSticks},
++
++std::mutex binds_mutex;
++struct RuntimeBind {
++  std::string keys;
++  int out;
 +};
-+constexpr Bind kBicycle[] = {
-+    {"W", kRT}, {"S", kLT}, {"Q", kLT}, {"A", kLSLeft}, {"D", kLSRight}, {"Shift", kLSUp},
-+    {"Control", kLSDown}, {"Space", kRB}, {"CapsLock", kA}, {"F", kY}, {"R", kB}, {"X", kA},
-+};
-+constexpr Bind kAircraft[] = {  // planes, helicopters
-+    {"W", kRT}, {"S", kLT}, {"A,Numpad7", kLB}, {"D,Numpad9", kRB}, {"Numpad4", kLSLeft},
-+    {"Numpad6", kLSRight}, {"Numpad8", kLSUp}, {"Numpad5", kLSDown}, {"RMB,Space", kA}, {"G", kL3},
-+    {"E", kDRight}, {"X", kA}, {"F", kY}, {"Insert", kR3}, {"R", kB}, {"CapsLock", kBothSticks},
-+};
-+constexpr Bind kSub[] = {
-+    {"W", kRT}, {"S", kLT}, {"A", kLB}, {"D", kRB}, {"Numpad4", kLSLeft}, {"Numpad6", kLSRight},
-+    {"Numpad8", kLSUp}, {"Numpad5", kLSDown}, {"Shift", kX}, {"Control", kA}, {"F", kY}, {"R", kB},
-+};
-+constexpr Bind kParachute[] = {
-+    {"W", kLSUp}, {"S", kLSDown}, {"A", kLSLeft}, {"D", kLSRight}, {"F,LMB", kY}, {"Q", kLB},
-+    {"E", kRB}, {"X", kA}, {"Shift", kA},
-+};
-+constexpr Bind kFrontend[] = {  // pause menu and its map (the shared list is not used here)
-+    {"Up", kDUp}, {"Down", kDDown}, {"Left", kDLeft}, {"Right", kDRight}, {"W", kLSUp}, {"S", kLSDown},
-+    {"A", kLSLeft}, {"D", kLSRight}, {"Return,LMB", kA}, {"Backspace,Escape,RMB", kB}, {"Space", kX},
-+    {"Tab", kY}, {"Q", kLB}, {"E", kRB}, {"PageDown", kLT}, {"PageUp", kRT}, {"Shift", kL3},
-+    {"Control", kR3}, {"CapsLock,Home", kBack}, {"P", kStart},
-+};
++// Index: InputContext, then kSharedTable.
++constexpr int kSharedTable = int(rex::input::mnk::InputContext::kFrontend) + 1;
++std::vector<RuntimeBind> context_binds[kSharedTable + 1];
++bool binds_set[kSharedTable + 1] = {};
++
++std::atomic<float> mouse_scale[kSharedTable] = {};
++std::atomic<bool> mouse_invert[kSharedTable] = {};
++std::atomic<bool> mouse_options_set{false};
 +}  // namespace
++
++void SetContextBindings(int table, std::vector<std::pair<std::string, PadOutput>> binds) {
++  if (table < 0 || table > kSharedTable) return;
++  std::lock_guard lock(binds_mutex);
++  auto& dst = context_binds[table];
++  dst.clear();
++  for (auto& [keys, out] : binds) dst.push_back({std::move(keys), int(out)});
++  binds_set[table] = true;
++}
++
++void SetMouseOptions(InputContext context, float scale, bool invert) {
++  const int i = int(context);
++  if (i < 0 || i >= kSharedTable) return;
++  mouse_scale[i] = scale;
++  mouse_invert[i] = invert;
++  mouse_options_set = true;
++}
 +
  bool IsMouseLookActive() {
    return mouse_look_active.load(std::memory_order_relaxed);
  }
-@@ -275,50 +370,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -275,50 +378,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    std::lock_guard lock(state_mutex_);
  
    uint16_t buttons = 0;
@@ -3167,20 +3267,36 @@ index 3f9422d..891df72 100644
  
    int32_t rx = 0;
    int32_t ry = 0;
-@@ -331,6 +414,12 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -331,11 +422,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
      ry -= INT16_MAX;
  
 +  ry += rs_pulse_y_;
-+  rs_pulse_y_ = 0;
++  rx += rs_pulse_x_;
++  rs_pulse_y_ = rs_pulse_x_ = 0;
 +  if (switch_stick_x_ || switch_stick_y_) {
 +    rx = switch_stick_x_, ry = switch_stick_y_;
 +    mouse_dx_ = mouse_dy_ = 0.0f;
 +  }
    if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
      double sensitivity = REXCVAR_GET(mnk_sensitivity);
++    double invert = 1.0;
++    if (mouse_options_set) {  // the title's per-context scale and invert (PC: on foot, driving, ...)
++      const int c = int(GetInputContext());
++      if (c >= 0 && c < kSharedTable) {
++        const float scale = mouse_scale[c];
++        if (scale > 0.0f) sensitivity *= scale;
++        if (mouse_invert[c]) invert = -1.0;
++      }
++    }
      constexpr double kBaseScale = 200.0;
-@@ -558,6 +647,120 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+     rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
+-    ry += static_cast<int32_t>(double(-mouse_dy_) * sensitivity * kBaseScale);
++    ry += static_cast<int32_t>(double(-mouse_dy_) * sensitivity * kBaseScale * invert);
+   }
+   // Drained unconditionally: deltas keep accumulating in OnMouseMove while the
+   // mouse is off, and toggling it on would otherwise dump the whole backlog
+@@ -558,6 +665,130 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    }
  }
  
@@ -3194,83 +3310,91 @@ index 3f9422d..891df72 100644
 +// state_mutex_ held (GetDeviceState). The PC game's key for each action in the current context,
 +// as the pad button that action has on the console (tables above); the mouse wheel and the
 +// number keys become what they do on PC (weapon selection by the title, zoom, scrolling).
++// state_mutex_ held (GetDeviceState). The title's bindings for the current context (key -> pad
++// output of the same game action) plus the shared ones; the mouse wheel is two keys (WheelUp,
++// WheelDown) held for one poll per detent. Outputs past the pad's are actions the title performs
++// (weapon selection) or short presses (vehicle weapon, scrolling) and character switches.
 +void MnkInputDriver::MapPcLayout(uint16_t* buttons, uint8_t* lt, uint8_t* rt, int32_t* lx, int32_t* ly) {
 +  using Clock = std::chrono::steady_clock;
 +  const auto now = Clock::now();
 +  const InputContext context = GetInputContext();
-+  bool out[kOutCount] = {};
-+  auto apply = [&](const Bind* table, size_t count) {
-+    for (size_t i = 0; i < count; ++i)
-+      if (IsBindPressed(key_down_, table[i].keys)) out[table[i].out] = true;
-+  };
-+  switch (context) {
-+    case InputContext::kOnFoot: apply(kFoot, std::size(kFoot)); break;
-+    case InputContext::kCar:
-+    case InputContext::kBike:
-+    case InputContext::kBoat: apply(kCar, std::size(kCar)); break;
-+    case InputContext::kBicycle: apply(kBicycle, std::size(kBicycle)); break;
-+    case InputContext::kAircraft: apply(kAircraft, std::size(kAircraft)); break;
-+    case InputContext::kSub: apply(kSub, std::size(kSub)); break;
-+    case InputContext::kParachute: apply(kParachute, std::size(kParachute)); break;
-+    case InputContext::kFrontend: apply(kFrontend, std::size(kFrontend)); break;
-+  }
-+  if (context != InputContext::kFrontend) apply(kShared, std::size(kShared));
 +
-+  // Mouse wheel, one step per detent: what it does on PC in this context.
-+  const bool aiming = key_down_[static_cast<uint16_t>(VirtualKey::kRButton)];
-+  const bool wheel_open = key_down_[static_cast<uint16_t>(VirtualKey::kTab)];
++  // One wheel detent per poll, as the WheelUp / WheelDown pseudo keys.
 +  constexpr int32_t kDetent = int32_t(rex::ui::MouseEvent::kScrollPerDetent);  // unsigned in ui_event.h
-+  while (wheel_accum_ >= kDetent || wheel_accum_ <= -kDetent) {
-+    const bool up = wheel_accum_ > 0;
-+    wheel_accum_ += up ? -kDetent : kDetent;
-+    Out pulse = kOutCount;
-+    switch (context) {
-+      case InputContext::kOnFoot:
-+        if (wheel_open) pulse = up ? kDLeft : kDRight;          // weapon wheel: previous / next in slot
-+        else if (aiming) pulse = up ? kLSUp : kLSDown;          // scope zoom
-+        else PushWeaponRequest(up ? kWeaponPrevious : kWeaponNext);  // select previous / next weapon
-+        break;
-+      case InputContext::kCar:
-+      case InputContext::kBike:
-+      case InputContext::kBoat:
-+        if (up) pulse = kX;  // vehicle weapon: next
-+        break;
-+      case InputContext::kAircraft:
-+        if (up) pulse = kDLeft;  // aircraft weapon: next
-+        break;
-+      case InputContext::kFrontend:
-+        rs_pulse_y_ += up ? INT16_MAX : -INT16_MAX;  // scroll lists / zoom the map
-+        break;
-+      default: break;
-+    }
-+    if (pulse != kOutCount) pulse_until_[pulse] = now + std::chrono::milliseconds(80);
++  key_down_[kWheelUpKey] = key_down_[kWheelDownKey] = false;
++  if (wheel_accum_ >= kDetent) {
++    wheel_accum_ -= kDetent;
++    key_down_[kWheelUpKey] = true;
++  } else if (wheel_accum_ <= -kDetent) {
++    wheel_accum_ += kDetent;
++    key_down_[kWheelDownKey] = true;
 +  }
-+  for (int i = 0; i < kOutCount; ++i)
-+    if (pulse_until_[i] > now) out[i] = true;
++  const bool wheel = key_down_[kWheelUpKey] || key_down_[kWheelDownKey];
 +
-+  // 1-9: weapon categories (unarmed, melee, shotgun, heavy, thrown, pistol, SMG, rifle, sniper);
-+  // F5-F7: switch to Michael / Franklin / Trevor. On the press only.
-+  for (int k = 1; k <= 9; ++k) {
-+    const bool down = key_down_[static_cast<uint16_t>(VirtualKey::k0) + k];
-+    if (down && !number_down_[k] && context == InputContext::kOnFoot) PushWeaponRequest(k);
-+    number_down_[k] = down;
++  bool out[kOutCount] = {};
++  int table_index = int(context);
++  {
++    std::lock_guard lock(binds_mutex);
++    auto apply_runtime = [&](int t) {
++      for (const auto& b : context_binds[t])
++        if (IsBindPressed(key_down_, b.keys)) out[b.out] = true;
++    };
++    auto apply_default = [&](const Bind* table, size_t count) {
++      for (size_t i = 0; i < count; ++i)
++        if (IsBindPressed(key_down_, table[i].keys)) out[int(table[i].out)] = true;
++    };
++    if (binds_set[table_index]) apply_runtime(table_index);
++    else if (context == InputContext::kOnFoot) apply_default(kFootDefault, std::size(kFootDefault));
++    if (context != InputContext::kFrontend) {
++      if (binds_set[kSharedTable]) apply_runtime(kSharedTable);
++      else apply_default(kSharedDefault, std::size(kSharedDefault));
++    }
 +  }
-+  for (int k = 0; k < 3; ++k) {
-+    const bool down = key_down_[static_cast<uint16_t>(VirtualKey::kF5) + k];
-+    if (down && !switch_down_[k] && context != InputContext::kFrontend && switch_start_ == decltype(switch_start_){}) {
++
++  // PC behaviour of the wheel beyond the plain bindings: in the open weapon wheel it steps through
++  // the slot (pad: D-pad), while aiming it zooms the scope (pad: left stick).
++  if (wheel && context == InputContext::kOnFoot) {
++    const bool up = key_down_[kWheelUpKey];
++    if (out[int(O::kLB)]) {
++      out[int(O::kWeaponNext)] = out[int(O::kWeaponPrevious)] = false;
++      pulse_until_[int(up ? O::kDLeft : O::kDRight)] = now + std::chrono::milliseconds(80);
++    } else if (out[int(O::kLT)]) {
++      out[int(O::kWeaponNext)] = out[int(O::kWeaponPrevious)] = false;
++      pulse_until_[int(up ? O::kLSUp : O::kLSDown)] = now + std::chrono::milliseconds(80);
++    }
++  }
++
++  // Edge-triggered outputs: on the press only.
++  auto pressed_now = [&](O o) {
++    const int i = int(o);
++    const bool fire = out[i] && !special_down_[i];
++    special_down_[i] = out[i];
++    return fire;
++  };
++  if (pressed_now(O::kWeaponNext)) PushWeaponRequest(kWeaponNext);
++  if (pressed_now(O::kWeaponPrevious)) PushWeaponRequest(kWeaponPrevious);
++  for (int k = 0; k < 9; ++k)
++    if (pressed_now(O(int(O::kWeaponUnarmed) + k))) PushWeaponRequest(k + 1);
++  if (pressed_now(O::kVehicleWeaponNext)) pulse_until_[int(O::kX)] = now + std::chrono::milliseconds(80);
++  if (pressed_now(O::kAircraftWeaponNext)) pulse_until_[int(O::kDLeft)] = now + std::chrono::milliseconds(80);
++  if (pressed_now(O::kScrollUp)) rs_pulse_y_ += INT16_MAX;
++  if (pressed_now(O::kScrollDown)) rs_pulse_y_ -= INT16_MAX;
++  for (int k = 0; k < 3; ++k)
++    if (pressed_now(O(int(O::kSwitchMichael) + k)) && switch_start_ == decltype(switch_start_){}) {
 +      switch_target_ = k;
 +      switch_start_ = now;
 +    }
-+    switch_down_[k] = down;
-+  }
++  for (int i = 0; i < kOutCount; ++i)
++    if (pulse_until_[i] > now) out[i] = true;
++
 +  // The console's switch: hold D-pad down (character wheel), push the right stick at the character
 +  // (Michael left, Franklin up, Trevor right), let go.
 +  if (switch_start_ != decltype(switch_start_){}) {
 +    const auto t = now - switch_start_;
 +    if (t < std::chrono::milliseconds(300)) {
-+      out[kDDown] = true;
++      out[int(O::kDDown)] = true;
 +    } else if (t < std::chrono::milliseconds(600)) {
-+      out[kDDown] = true;
++      out[int(O::kDDown)] = true;
 +      switch_stick_x_ = switch_target_ == 0 ? -INT16_MAX : switch_target_ == 2 ? INT16_MAX : 0;
 +      switch_stick_y_ = switch_target_ == 1 ? INT16_MAX : 0;
 +    } else if (t < std::chrono::milliseconds(700)) {
@@ -3285,22 +3409,91 @@ index 3f9422d..891df72 100644
 +                           X_INPUT_GAMEPAD_LEFT_THUMB, X_INPUT_GAMEPAD_RIGHT_THUMB, X_INPUT_GAMEPAD_BACK,
 +                           X_INPUT_GAMEPAD_START, X_INPUT_GAMEPAD_DPAD_UP, X_INPUT_GAMEPAD_DPAD_DOWN,
 +                           X_INPUT_GAMEPAD_DPAD_LEFT, X_INPUT_GAMEPAD_DPAD_RIGHT};
-+  for (int i = kA; i <= kDRight; ++i)
++  for (int i = int(O::kA); i <= int(O::kDRight); ++i)
 +    if (out[i]) *buttons |= bits[i];
-+  if (out[kBothSticks]) *buttons |= X_INPUT_GAMEPAD_LEFT_THUMB | X_INPUT_GAMEPAD_RIGHT_THUMB;
-+  *lt = out[kLT] ? 0xFF : 0;
-+  *rt = out[kRT] ? 0xFF : 0;
-+  if (out[kLSLeft]) *lx -= INT16_MAX;
-+  if (out[kLSRight]) *lx += INT16_MAX;
-+  if (out[kLSUp]) *ly += INT16_MAX;
-+  if (out[kLSDown]) *ly -= INT16_MAX;
-+  if (out[kRSUp]) rs_pulse_y_ += INT16_MAX;
-+  if (out[kRSDown]) rs_pulse_y_ -= INT16_MAX;
++  if (out[int(O::kBothSticks)]) *buttons |= X_INPUT_GAMEPAD_LEFT_THUMB | X_INPUT_GAMEPAD_RIGHT_THUMB;
++  *lt = out[int(O::kLT)] ? 0xFF : 0;
++  *rt = out[int(O::kRT)] ? 0xFF : 0;
++  if (out[int(O::kLSLeft)]) *lx -= INT16_MAX;
++  if (out[int(O::kLSRight)]) *lx += INT16_MAX;
++  if (out[int(O::kLSUp)]) *ly += INT16_MAX;
++  if (out[int(O::kLSDown)]) *ly -= INT16_MAX;
++  if (out[int(O::kRSUp)]) rs_pulse_y_ += INT16_MAX;
++  if (out[int(O::kRSDown)]) rs_pulse_y_ -= INT16_MAX;
++  if (out[int(O::kRSLeft)]) rs_pulse_x_ -= INT16_MAX;
++  if (out[int(O::kRSRight)]) rs_pulse_x_ += INT16_MAX;
 +}
 +
  void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
    has_focus_ = false;
    // Withdraw the request too, or an update queued before the focus loss grabs
+diff --git a/src/input/pad_remap.cpp b/src/input/pad_remap.cpp
+new file mode 100644
+index 0000000..3b0e869
+--- /dev/null
++++ b/src/input/pad_remap.cpp
+@@ -0,0 +1,61 @@
++/**
++ * @file        input/pad_remap.cpp
++ * @brief       Remapping of real controllers' buttons and triggers.
++ */
++#include <rex/input/pad_remap.h>
++
++#include <algorithm>
++#include <atomic>
++#include <mutex>
++
++namespace rex::input {
++namespace {
++std::mutex g_mutex;
++std::array<uint8_t, kPadControlCount> g_map = {};
++std::atomic<bool> g_active{false};
++
++constexpr uint16_t kBits[] = {X_INPUT_GAMEPAD_A, X_INPUT_GAMEPAD_B, X_INPUT_GAMEPAD_X, X_INPUT_GAMEPAD_Y,
++                              X_INPUT_GAMEPAD_LEFT_SHOULDER, X_INPUT_GAMEPAD_RIGHT_SHOULDER,
++                              X_INPUT_GAMEPAD_LEFT_THUMB, X_INPUT_GAMEPAD_RIGHT_THUMB, X_INPUT_GAMEPAD_BACK,
++                              X_INPUT_GAMEPAD_START, X_INPUT_GAMEPAD_DPAD_UP, X_INPUT_GAMEPAD_DPAD_DOWN,
++                              X_INPUT_GAMEPAD_DPAD_LEFT, X_INPUT_GAMEPAD_DPAD_RIGHT};
++}  // namespace
++
++void SetPadRemap(const std::array<uint8_t, kPadControlCount>& map) {
++  std::lock_guard lock(g_mutex);
++  g_map = map;
++  bool identity = true;
++  for (int i = 0; i < kPadControlCount; ++i)
++    if (map[i] != i) identity = false;
++  g_active = !identity;
++}
++
++void ApplyPadRemap(X_INPUT_STATE& state) {
++  if (!g_active.load(std::memory_order_relaxed)) return;
++  std::array<uint8_t, kPadControlCount> map;
++  {
++    std::lock_guard lock(g_mutex);
++    map = g_map;
++  }
++  X_INPUT_GAMEPAD& in = state.gamepad;
++  uint8_t value[kPadControlCount] = {};
++  for (int i = 0; i < kPadDRight + 1; ++i) value[i] = (in.buttons & kBits[i]) ? 0xFF : 0;
++  value[kPadLT] = in.left_trigger;
++  value[kPadRT] = in.right_trigger;
++  uint16_t buttons = in.buttons;  // the guide button is not remappable
++  for (uint16_t bit : kBits) buttons &= uint16_t(~bit);
++  uint8_t lt = 0, rt = 0;
++  for (int i = 0; i < kPadControlCount; ++i) {
++    const uint8_t v = value[i];
++    if (!v) continue;
++    const uint8_t to = map[i] < kPadControlCount ? map[i] : uint8_t(i);
++    if (to == kPadLT) lt = std::max(lt, v);
++    else if (to == kPadRT) rt = std::max(rt, v);
++    else if (v > 0x40) buttons |= kBits[to];  // a trigger as a button: past a third of its travel
++  }
++  in.buttons = buttons;
++  in.left_trigger = lt;
++  in.right_trigger = rt;
++}
++
++}  // namespace rex::input
 diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
 index c7c440d..95eaccf 100644
 --- a/src/input/sdl/sdl_input_driver.cpp

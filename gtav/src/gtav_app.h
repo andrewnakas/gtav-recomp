@@ -8,6 +8,7 @@
 #include <rex/rex_app.h>
 
 #include "native/menu.h"
+#include "native/controls.h"
 #include "pc_controls.h"
 #include "native/touch_controls.h"
 #include <rex/system/kernel_state.h>
@@ -49,6 +50,7 @@ class GtavApp : public rex::ReXApp {
     // boot) and the stereo mix (audio device opened at setup) apply from it. The renderer loads
     // it again when it starts.
     gtav::native::menu::LoadSettings();
+    gtav::native::controls::Load();  // key bindings, mouse options, controller remap (controls.ini)
     config.input_factory = [](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
       auto input = rex::input::CreateDefaultInputSystem(tool_mode);
       if (!tool_mode) input->AddDriver(gtav::native::touch::CreateDriver());

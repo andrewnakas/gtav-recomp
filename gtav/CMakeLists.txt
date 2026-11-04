@@ -66,6 +66,7 @@ set(GTAV_SOURCES
     src/native/renderer.cpp
     src/native/shaders.cpp
     src/native/menu.cpp
+    src/native/controls.cpp
     src/native/backend.cpp
     src/native/deferred_list.cpp
     src/native/textures.cpp

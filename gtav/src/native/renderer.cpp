@@ -7,6 +7,7 @@
 #include "capture.h"
 #include "frame.h"
 #include "menu.h"
+#include "controls.h"
 #include "paths.h"
 #include "shader_compiler.h"
 
@@ -21,6 +22,10 @@
 #endif
 
 #include <rex/cvar.h>
+#include <rex/ui/keybinds.h>
+#ifndef _WIN32
+#include <rex/ui/sdl_virtual_key.h>
+#endif
 #include <rex/logging.h>
 #include <fmt/ranges.h>
 
@@ -277,6 +282,20 @@ class Renderer {
   }
 
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (controls::Capturing()) {  // Controls menu waiting for a key (Esc cancels)
+      switch (msg) {
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+          if (wp == VK_ESCAPE) controls::CancelCapture();
+          else controls::OnCaptureKey(rex::ui::VirtualKeyToString(rex::ui::VirtualKey(wp)));
+          return 0;
+        case WM_LBUTTONDOWN: controls::OnCaptureKey("LMB"); return 0;
+        case WM_RBUTTONDOWN: controls::OnCaptureKey("RMB"); return 0;
+        case WM_MBUTTONDOWN: controls::OnCaptureKey("MMB"); return 0;
+        case WM_MOUSEWHEEL: controls::OnCaptureKey(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? "WheelUp" : "WheelDown"); return 0;
+        default: break;
+      }
+    }
     if (msg == kMsgFullscreen) {
       SetBorderlessFullscreen(hwnd, wp != 0);
       return 0;
@@ -638,6 +657,24 @@ class Renderer {
           SDL_AddEventWatch(
               [](void*, SDL_Event* e) {
 #if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+                // Controls menu waiting for a key: this one is the new binding (Esc cancels).
+                if (controls::Capturing()) {
+                  if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {
+                    if (e->key.scancode == SDL_SCANCODE_ESCAPE) controls::CancelCapture();
+                    else controls::OnCaptureKey(rex::ui::VirtualKeyToString(rex::ui::TranslateSDLScancode(e->key.scancode)));
+                    return true;
+                  }
+                  if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    const uint8_t b = e->button.button;
+                    controls::OnCaptureKey(b == SDL_BUTTON_LEFT ? "LMB" : b == SDL_BUTTON_RIGHT ? "RMB" : b == SDL_BUTTON_MIDDLE ? "MMB" : "");
+                    return true;
+                  }
+                  if (e->type == SDL_EVENT_MOUSE_WHEEL && e->wheel.y != 0) {
+                    controls::OnCaptureKey(e->wheel.y > 0 ? "WheelUp" : "WheelDown");
+                    return true;
+                  }
+                  if (e->type == SDL_EVENT_KEY_UP || e->type == SDL_EVENT_MOUSE_BUTTON_UP) return true;
+                }
                 if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat)
                   esc_was_menu_ = menu::IsOpen() || !MnkMode();
 #endif

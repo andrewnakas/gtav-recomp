@@ -4,6 +4,7 @@
 #include <TargetConditionals.h>
 #endif
 #include "touch_controls.h"
+#include "controls.h"
 
 #include "paths.h"
 
@@ -41,6 +42,7 @@ struct Input {
 std::mutex g_input_mutex;
 std::vector<Input> g_input;
 std::atomic<bool> g_open{false};
+bool g_controls_open = false;
 
 ImGuiContext* g_context = nullptr;
 bool g_font_uploaded = false;
@@ -260,6 +262,7 @@ void Build(uint32_t fps, double frame_ms) {
 #if !GTAV_MENU_PHONE
   ImGui::Separator();
   ImGui::TextUnformatted("Keyboard and mouse");
+  if (ImGui::Button("Controls (keys, mouse, controller)...")) g_controls_open = true;
   check("Mouse look", "mnk_mouse",
         "The mouse turns the camera (right stick); the pointer is locked to the game window.\n"
         "F1 (this menu) releases it.");
@@ -303,6 +306,9 @@ void Build(uint32_t fps, double frame_ms) {
   ImGui::TextDisabled("Controller: RB + Back opens/closes this menu; D-pad + A to change, B to close.");
   if (changed) SaveSettings();
   ImGui::End();
+#if !GTAV_MENU_PHONE
+  if (g_controls_open) controls::DrawWindow(&g_controls_open, g_scale);
+#endif
   if (!open) g_open = false;
 }
 
