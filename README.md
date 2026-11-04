@@ -80,6 +80,19 @@ from them.
   recommended (Xbox or PlayStation through SDL; Windows: XInput). The keyboard works on Mac and Linux.
 - **For the phones** (optional): see [iPhone](#iphone) and [Android](#android).
 
+## Settings and controls
+
+- **Settings menu**: F1 (with keyboard and mouse), Esc (controller only), or RB + Back on a
+  controller. Fullscreen (also F11 / Alt+Enter), Resolution (up to 2560x1440, applies on the next
+  start), Language, frame rate limit, VSync, stereo mix and the renderer options.
+- **Keyboard and mouse**: GTA V PC's default keys, switching with what you do (on foot, driving,
+  flying, bicycle, submarine, parachute, pause menu). Mouse wheel and 1-9 select weapons, F5-F7
+  switch characters, Esc pauses. **Settings > Controls** remaps every action (primary and
+  secondary key), has PC's mouse options (invert, sensitivity per context) and remaps controller
+  buttons. Saved to `controls.ini`.
+- **First launch**: the game's shaders are translated on your computer while it loads ("Preparing
+  shaders" in the corner); later launches reuse them.
+
 ## Windows
 
 1. Download `gtav-recomp-windows-x64.zip`, unzip it somewhere with enough space, and run
@@ -119,8 +132,9 @@ sideloading tool that signs apps with your own Apple ID:
 [Sideloadly](https://sideloadly.io) (Windows, macOS) or [AltStore](https://altstore.io).
 A free Apple ID works, but the app has to be re-signed every 7 days.
 
-1. **Install and play the game on your computer first, for a while.** The phone gets the shaders your
-   computer has seen, so drive around and go inside some buildings.
+1. **Install the game on your computer and start it once, until you are in the world.** The phone
+   gets the shaders your computer has translated, and the game creates nearly all of them (~3,600)
+   while it loads; no need to drive around.
 2. **Build for iPhone.** Open the setup window (Windows: hold Shift starting the launcher; macOS:
    hold Option opening the app; Linux: `./gtav_launcher --setup`) and press **Build for iPhone**
    (or run the launcher with `--iphone`). It takes about 15-25 minutes and shows you
@@ -143,7 +157,7 @@ on the phone stay.
 Needs a recent **Snapdragon** phone (tested: Galaxy S23 FE, Snapdragon 8 Gen 1) with about 40 GB
 free during setup.
 
-1. **Install and play the game on your computer first, for a while** (as for iPhone).
+1. **Install the game on your computer and start it once, until you are in the world** (as for iPhone).
 2. **Build for Android** in the setup window (or `--android`). You get
    `android/gtav-android-pack.zip` (your game code + shaders) and `android/GTAV.apk` (the app; no
    game inside).
