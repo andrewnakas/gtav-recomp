@@ -167,7 +167,7 @@ void Build(uint32_t fps, double frame_ms) {
 #endif
   ImGui::SetNextWindowSize(ImVec2(520.0f * g_scale, 0.0f), ImGuiCond_FirstUseEver);
   bool open = true;
-  if (!ImGui::Begin("Settings (Esc / B to close)", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("Settings (F1 / Esc / B to close)", &open, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     return;
   }
@@ -262,7 +262,7 @@ void Build(uint32_t fps, double frame_ms) {
   ImGui::TextUnformatted("Keyboard and mouse");
   check("Mouse look", "mnk_mouse",
         "The mouse turns the camera (right stick); the pointer is locked to the game window.\n"
-        "Esc (this menu) releases it.");
+        "F1 (this menu) releases it.");
   {
     float sens = float(std::atof(rex::cvar::GetFlagByName("mnk_sensitivity").c_str()));
     ImGui::SetNextItemWidth(200.0f * g_scale);
@@ -271,8 +271,9 @@ void Build(uint32_t fps, double frame_ms) {
       changed = true;
     }
   }
-  ImGui::TextDisabled("Move WASD, camera mouse or arrows, A=Space B=Backspace X=L Y=P,\n"
-                      "LT=Q RT=E LB=1 RB=3, Start=Enter Back=Tab, D-pad=Shift+arrows.");
+  ImGui::TextDisabled("GTA V PC default keys: they switch with what you do (on foot, driving,\n"
+                      "flying, parachute, pause menu). Mouse wheel / 1-9: weapons, F5-F7: characters.\n"
+                      "F1 opens this menu, Esc is the game's pause.");
   ImGui::Separator();
   ImGui::TextUnformatted("Sound");
   check("Stereo mix", "audio_force_stereo",
