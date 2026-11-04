@@ -12,6 +12,7 @@
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -196,6 +197,26 @@ void Build(uint32_t fps, double frame_ms) {
   };
 #if !GTAV_MENU_PHONE
   check("Fullscreen", "gtav_fullscreen", "Borderless fullscreen at the desktop resolution. F11 or Alt+Enter also toggle it.");
+  {
+    // The game renders at 1280x720 on the Xbox; the native renderer can draw its 3D passes at a
+    // multiple of that. Read once at start (render targets are made at that size).
+    static const double kScales[] = {0.75, 1.0, 1.5, 2.0};
+    static const char* kNames[] = {"960x540 (faster)", "1280x720 (Xbox)", "1920x1080", "2560x1440"};
+    static const double started = std::atof(rex::cvar::GetFlagByName("gtav_native_render_scale").c_str());
+    const double now = std::atof(rex::cvar::GetFlagByName("gtav_native_render_scale").c_str());
+    int choice = 1;
+    for (int i = 0; i < 4; i++)
+      if (std::abs(now - kScales[i]) < 0.01) choice = i;
+    ImGui::SetNextItemWidth(260.0f * g_scale);
+    if (ImGui::Combo("Resolution", &choice, kNames, 4)) {
+      rex::cvar::SetFlagByName("gtav_native_render_scale", std::to_string(kScales[choice]));
+      changed = true;
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("3D rendering resolution (the HUD and menus stay at the game's own size).\n"
+                        "Takes effect the next time the game starts.");
+    if (std::abs(now - started) > 0.01) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Restart the game to apply the new resolution.");
+  }
 #endif
   check("VSync", "gtav_native_vsync", "Wait for the display refresh: no tearing, fps capped at the refresh rate.");
   check("FPS counter", "gtav_native_fps", "Frames per second in the top-left corner.");

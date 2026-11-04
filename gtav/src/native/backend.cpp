@@ -198,7 +198,7 @@ REXCVAR_DEFINE_BOOL(gtav_native_point_float32, GTAV_POINT_FLOAT32_DEFAULT, "GTAV
 #endif
 REXCVAR_DEFINE_DOUBLE(gtav_native_render_scale, GTAV_RENDER_SCALE_DEFAULT, "GTAV",
                       "Native renderer: render the full-width (1280) targets at this fraction of their size "
-                      "(0.5-1; read at start). Needs SPIR-V made with the pixel scale constant (make_spirv.sh)");
+                      "(0.5-2: above 1 renders at a higher resolution than the Xbox 720p; read at start)");
 REXCVAR_DEFINE_BOOL(gtav_native_zero_new_targets, true, "GTAV",
                     "Native renderer: new render targets and resolve destinations start zeroed (Adreno hands out "
                     "recycled memory: grey blocks where the game never writes)");
@@ -2489,7 +2489,7 @@ struct Backend::Impl {
 
   bool Init(RenderDevice* dev) {
     device = dev;
-    rs = float(std::clamp(REXCVAR_GET(gtav_native_render_scale), 0.5, 1.0));
+    rs = float(std::clamp(REXCVAR_GET(gtav_native_render_scale), 0.5, 2.0));
     g_pixel_scale_inv = 1.0f / rs;
     if (rs != 1.0f) REXLOG_INFO("[native] render scale {:.3f} (full-width targets)", rs);
     upload.device = dev;
