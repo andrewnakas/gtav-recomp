@@ -8,6 +8,7 @@
 #include <rex/rex_app.h>
 
 #include "native/menu.h"
+#include "pc_controls.h"
 #include "native/touch_controls.h"
 #include <rex/system/kernel_state.h>
 #include <rex/ui/presenter.h>
@@ -70,6 +71,9 @@ class GtavApp : public rex::ReXApp {
   // GTAV_SHOT_DIR=<dir> [GTAV_SHOT_SECS=<n>, default 30]: every n seconds save the guest
   // output as <dir>/shot_<seconds>.ppm. For checking unattended boots (no screen capture needed).
   void OnPostSetup() override {
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+    gtav::StartVehicleContextPoll();  // keyboard/mouse: on-foot or vehicle layout (PC controls)
+#endif
 #ifdef __ANDROID__
     // The settings menu (controller: RB + Back) takes the pad while open: the game sees no input.
     if (auto* input = static_cast<rex::input::InputSystem*>(runtime() ? runtime()->input_system() : nullptr))

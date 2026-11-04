@@ -253,6 +253,8 @@ class Renderer {
     spare_.push_back(std::move(p));
   }
 
+  static bool MnkMode() { return rex::cvar::GetFlagByName("mnk_mode") == "true"; }
+
 #ifdef _WIN32
   static constexpr UINT kMsgFullscreen = WM_APP + 1;  // wParam 1 = borderless fullscreen, 0 = window
   static void SetBorderlessFullscreen(HWND hwnd, bool on) {
@@ -295,7 +297,8 @@ class Renderer {
       case WM_KEYDOWN:
       case WM_KEYUP: {
         bool down = msg == WM_KEYDOWN;
-        if (wp == VK_ESCAPE && down && !(lp & (1 << 30))) menu::OnEscape();
+        if ((wp == VK_F1 || (wp == VK_ESCAPE && (menu::IsOpen() || !MnkMode()))) && down && !(lp & (1 << 30)))
+          menu::OnEscape();
         if (wp == VK_UP) menu::OnKey(menu::Key::kUp, down);
         if (wp == VK_DOWN) menu::OnKey(menu::Key::kDown, down);
         if (wp == VK_LEFT) menu::OnKey(menu::Key::kLeft, down);
@@ -490,6 +493,7 @@ class Renderer {
   static inline SDL_WindowID sdk_window_id_ = 0;
   static inline SDL_WindowID native_window_id_ = 0;
   static inline std::atomic<bool> native_focused_{true};
+  static inline bool esc_was_menu_ = false;  // event watch thread: this Esc press was the menu's
   static void ForwardToSdk(const SDL_Event* e) {
     if (!sdk_window_id_ || !native_window_id_) return;
     SDL_Event copy = *e;
@@ -514,6 +518,10 @@ class Renderer {
     const bool focus = e->type == SDL_EVENT_WINDOW_FOCUS_GAINED || e->type == SDL_EVENT_WINDOW_FOCUS_LOST;
     // While the menu is open the game sees nothing (key-ups still go through: no stuck keys).
     if (!focus && menu::IsOpen() && e->type != SDL_EVENT_KEY_UP && e->type != SDL_EVENT_MOUSE_BUTTON_UP) return;
+    // F1 (this menu) is never the game's; nor is the Esc that closed the menu (esc_was_menu_).
+    if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) &&
+        (e->key.scancode == SDL_SCANCODE_F1 || (e->key.scancode == SDL_SCANCODE_ESCAPE && esc_was_menu_)))
+      return;
     *id = sdk_window_id_;
     SDL_PushEvent(&copy);
   }
@@ -629,6 +637,10 @@ class Renderer {
 #endif
           SDL_AddEventWatch(
               [](void*, SDL_Event* e) {
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+                if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat)
+                  esc_was_menu_ = menu::IsOpen() || !MnkMode();
+#endif
                 if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {
                   if (e->key.scancode == SDL_SCANCODE_F8) key_replay_ = true;
                   if (e->key.scancode == SDL_SCANCODE_F9 || e->key.scancode == SDL_SCANCODE_N) key_dump_ = true;
@@ -643,7 +655,11 @@ class Renderer {
                       (e->key.mod & SDL_KMOD_ALT))
                     menu::ToggleFullscreen();
                   // Android's Back button arrives as AC_BACK: it opens the settings menu too.
-                  if (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) menu::OnEscape();
+                  // With keyboard+mouse (mnk_mode) Esc belongs to the game as on PC (pause, back) and F1
+                  // opens this menu; Esc still closes it.
+                  if (e->key.scancode == SDL_SCANCODE_F1 || e->key.scancode == SDL_SCANCODE_AC_BACK ||
+                      (e->key.scancode == SDL_SCANCODE_ESCAPE && (menu::IsOpen() || !MnkMode())))
+                    menu::OnEscape();
                 }
                 MenuInput(e);
                 ForwardToSdk(e);
