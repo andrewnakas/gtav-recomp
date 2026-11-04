@@ -13,11 +13,18 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+#define GTAV_MENU_PHONE 1
+#else
+#define GTAV_MENU_PHONE 0
+#endif
 
 namespace gtav::native::menu {
 
@@ -49,6 +56,10 @@ constexpr const char* kSettings[] = {
     "gtav_native_exact_cache",
     "gtav_native_texture_recheck_frames",
     "gtav_touch_controls",
+#if !GTAV_MENU_PHONE
+    "gtav_fullscreen",
+    "gtav_native_render_scale",
+#endif
 };
 
 std::filesystem::path SettingsPath() { return ExeDir() / "gtav_settings.ini"; }
@@ -183,6 +194,9 @@ void Build(uint32_t fps, double frame_ms) {
     }
     if (help && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
   };
+#if !GTAV_MENU_PHONE
+  check("Fullscreen", "gtav_fullscreen", "Borderless fullscreen at the desktop resolution. F11 or Alt+Enter also toggle it.");
+#endif
   check("VSync", "gtav_native_vsync", "Wait for the display refresh: no tearing, fps capped at the refresh rate.");
   check("FPS counter", "gtav_native_fps", "Frames per second in the top-left corner.");
   ImGui::Separator();
@@ -236,6 +250,10 @@ void OnEscape() {
   }
 }
 bool IsOpen() { return g_open.load(); }
+void ToggleFullscreen() {
+  SetBool("gtav_fullscreen", !GetBool("gtav_fullscreen"));
+  if (!std::getenv("GTAV_IGNORE_SETTINGS")) SaveSettings();
+}
 void OnMouseMove(float x, float y) { Push({Input::kMove, x, y}); }
 void OnMouseButton(int button, bool down) { Push({Input::kButton, 0, 0, button, down}); }
 void OnMouseWheel(float dy) { Push({Input::kWheel, 0, dy}); }
@@ -267,9 +285,9 @@ void LoadSettings() {
   }
 }
 
-ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms) {
+ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms, uint32_t pending_shaders) {
   const bool touch_overlay = touch::Visible();
-  if (!g_open && !touch_overlay) return nullptr;
+  if (!g_open && !touch_overlay && !pending_shaders) return nullptr;
   EnsureContext(h);
   ImGuiContext* previous = ImGui::GetCurrentContext();
   ImGui::SetCurrentContext(g_context);
@@ -296,6 +314,19 @@ ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms) {
   ImGui::NewFrame();
   if (g_open) Build(fps, frame_ms);
   if (touch_overlay) touch::Draw(ImGui::GetForegroundDrawList(), float(w), float(h));
+  if (pending_shaders) {
+    // First launch: the game's shaders are translated on this machine while it boots; the picture
+    // can stay dark until they are done. Later launches reuse them.
+    char text[128];
+    std::snprintf(text, sizeof(text), "Preparing shaders: %u left (first launch only)", pending_shaders);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 size = ImGui::CalcTextSize(text);
+    const float pad = 8.0f * g_scale;
+    const ImVec2 at(float(w) - size.x - 3 * pad, 3 * pad);
+    dl->AddRectFilled(ImVec2(at.x - pad, at.y - pad), ImVec2(at.x + size.x + pad, at.y + size.y + pad),
+                      IM_COL32(0, 0, 0, 170), 4.0f * g_scale);
+    dl->AddText(at, IM_COL32(255, 255, 255, 255), text);
+  }
   ImGui::Render();
   ImDrawData* data = ImGui::GetDrawData();
   if (previous && previous != g_context) ImGui::SetCurrentContext(previous);

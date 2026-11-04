@@ -18,6 +18,8 @@ void OnMouseButton(int button, bool down);
 void OnMouseWheel(float dy);
 enum class Key { kUp, kDown, kLeft, kRight, kEnter, kSpace, kTab };
 void OnKey(Key key, bool down);
+// F11 / Alt+Enter: flips gtav_fullscreen and saves it (the renderer applies it next frame).
+void ToggleFullscreen();
 
 // Applies gtav_settings.ini (next to the exe) over the command line. Once, before the first frame.
 void LoadSettings();
@@ -27,7 +29,8 @@ void TestSet(const std::string& name, const std::string& value);
 
 // Render thread. Builds the menu for a display of w x h pixels when it is open; null when closed.
 // `fps` is the presented rate over the last second, `frame_ms` the average time per frame.
-ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms);
+// `pending_shaders`: shaders still compiling (first launch); shown as a status line while non-zero.
+ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms, uint32_t pending_shaders = 0);
 
 // The font atlas (RGBA8) for the backend's upload; true once, the first time the menu opens.
 bool TakeFontAtlas(const uint8_t** pixels, int* width, int* height);

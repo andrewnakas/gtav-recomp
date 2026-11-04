@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -61,6 +62,9 @@ std::condition_variable g_cv;
 std::deque<std::string> g_queue;  // shader names ("ps_<HASH>")
 std::unordered_set<std::string> g_seen;
 std::unordered_set<std::string> g_present;  // .spv on disk: found at intake or compiled since
+std::unordered_set<std::string> g_failed_names;
+std::condition_variable g_done_cv;  // a compile finished (WaitForShader)
+std::atomic<uint32_t> g_pending{0};  // in intake, queued or compiling
 std::atomic<uint32_t> g_ok{0}, g_failed{0};
 bool g_started = false;
 // New shaders arrive on game threads (the D3D create hooks). The disk checks and the container
@@ -109,7 +113,7 @@ bool Run(const std::vector<std::string>& args) {
   (void)args;
   return false;
 #else
-  std::string cmd;
+  std::string cmd = "nice -n 5 ";  // below the game's threads, like BELOW_NORMAL on Windows
   for (const auto& a : args) cmd += "'" + a + "' ";
   cmd += ">/dev/null 2>&1";
   return std::system(cmd.c_str()) == 0;
@@ -233,11 +237,14 @@ void Worker() {
       name = std::move(g_queue.front());
       g_queue.pop_front();
     }
-    if (Compile(name)) {
-      {
-        std::lock_guard lock(g_mutex);
-        g_present.insert(name);
-      }
+    const bool ok = Compile(name);
+    {
+      std::lock_guard lock(g_mutex);
+      (ok ? g_present : g_failed_names).insert(name);
+      g_pending.fetch_sub(1, std::memory_order_relaxed);
+    }
+    g_done_cv.notify_all();
+    if (ok) {
       g_generation.fetch_add(1, std::memory_order_release);
       uint32_t n = g_ok.fetch_add(1) + 1;
       if (n <= 5 || n % 50 == 0) REXLOG_INFO("[native] compiled {} new shaders (latest {})", n, name);
@@ -255,7 +262,9 @@ void Enqueue(const std::string& name) {
     // Low-priority workers: two were enough to catch up after a streaming burst with the
     // precompiled set; a first run with no SPIR-V compiles every shader the game creates, so
     // machines with more cores get more (a third of them).
-    int workers = std::max(2, int(std::thread::hardware_concurrency()) / 3);
+    // A first launch compiles all ~3,600 while the game boots and draws wait for them: half the
+    // threads (a Steam Deck's 2 workers at a third took minutes).
+    int workers = std::max(2, int(std::thread::hardware_concurrency()) / 2);
     for (int i = 0; i < workers; i++) std::thread(Worker).detach();
   }
   g_queue.push_back(name);
@@ -265,6 +274,27 @@ void Enqueue(const std::string& name) {
 }  // namespace
 
 uint64_t CompileGeneration() { return g_generation.load(std::memory_order_acquire); }
+
+uint32_t PendingShaders() { return g_pending.load(std::memory_order_relaxed); }
+
+bool WaitForShader(const std::string& name, int timeout_ms) {
+  std::unique_lock lock(g_mutex);
+  if (g_present.count(name)) return true;
+  if (!g_seen.count(name) || g_failed_names.count(name)) return false;
+  // Queued behind others: compile it next.
+  if (auto it = std::find(g_queue.begin(), g_queue.end(), name); it != g_queue.end() && it != g_queue.begin()) {
+    g_queue.erase(it);
+    g_queue.push_front(name);
+  }
+  const auto start = std::chrono::steady_clock::now();
+  const bool done = g_done_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
+    return g_present.count(name) || g_failed_names.count(name);
+  });
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  static uint32_t logged = 0;
+  if (ms > 50 && logged++ < 20) REXLOG_INFO("[native] waited {:.0f} ms for shader {} to compile", ms, name);
+  return done && g_present.count(name);
+}
 
 bool ShaderOnDisk(const std::string& name) {
   std::lock_guard lock(g_mutex);
@@ -284,8 +314,12 @@ static void IntakeWorker() {
     // A fresh install starts with an empty (or no) SPIR-V dir: every shader is compiled here.
     fs::create_directories(SpirvDirPath(), ec);
     if (fs::exists(SpirvDirPath() / (item.name + ".spv"), ec) && VariantsOnDisk(item.name)) {
-      std::lock_guard lock(g_mutex);
-      g_present.insert(item.name);
+      {
+        std::lock_guard lock(g_mutex);
+        g_present.insert(item.name);
+        g_pending.fetch_sub(1, std::memory_order_relaxed);
+      }
+      g_done_cv.notify_all();
       continue;
     }
     fs::create_directories(CacheDir(), ec);
@@ -296,7 +330,16 @@ static void IntakeWorker() {
         std::fclose(f);
       }
     }
-    if (REXCVAR_GET(gtav_native_compile)) Enqueue(item.name);
+    if (REXCVAR_GET(gtav_native_compile)) {
+      Enqueue(item.name);
+    } else {
+      {
+        std::lock_guard lock(g_mutex);
+        g_failed_names.insert(item.name);  // saved for later, nothing to wait for
+        g_pending.fetch_sub(1, std::memory_order_relaxed);
+      }
+      g_done_cv.notify_all();
+    }
   }
 }
 
@@ -305,6 +348,7 @@ void OnShaderCreated(const uint8_t* container, size_t size, uint64_t hash, bool 
   std::string name = fmt::format("{}_{:016X}", pixel ? "ps" : "vs", hash);
   std::lock_guard lock(g_mutex);
   if (!g_seen.insert(name).second) return;
+  g_pending.fetch_add(1, std::memory_order_relaxed);
   if (!g_intake_started) {
     g_intake_started = true;
     std::thread(IntakeWorker).detach();

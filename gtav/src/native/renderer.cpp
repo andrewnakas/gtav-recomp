@@ -72,6 +72,8 @@ REXCVAR_DEFINE_INT32(gtav_native_flicker_min_blocks, 6, "GTAV",
 REXCVAR_DEFINE_BOOL(gtav_native_replay, false, "GTAV",
                     "Native renderer: keep the last 90 presented frames; F8 writes them to logs/replay");
 REXCVAR_DEFINE_BOOL(gtav_native_fps, false, "GTAV", "Native renderer: on-screen frames-per-second counter");
+REXCVAR_DEFINE_BOOL(gtav_fullscreen, false, "GTAV",
+                    "Native renderer: borderless fullscreen window (F11 or Alt+Enter toggles; saved by the Esc menu)");
 REXCVAR_DEFINE_BOOL(gtav_native_hidden, false, "GTAV",
                     "Native renderer: keep every game window hidden (unattended test runs)");
 REXCVAR_DEFINE_STRING(gtav_native_device, "NVIDIA", "GTAV",
@@ -252,7 +254,36 @@ class Renderer {
   }
 
 #ifdef _WIN32
+  static constexpr UINT kMsgFullscreen = WM_APP + 1;  // wParam 1 = borderless fullscreen, 0 = window
+  static void SetBorderlessFullscreen(HWND hwnd, bool on) {
+    static WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (on) {
+      MONITORINFO mi{sizeof(mi)};
+      if (!GetWindowPlacement(hwnd, &placement) ||
+          !GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi))
+        return;
+      SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
+      SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                   mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    } else {
+      SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~WS_POPUP) | WS_OVERLAPPEDWINDOW);
+      SetWindowPlacement(hwnd, &placement);
+      SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+  }
+
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == kMsgFullscreen) {
+      SetBorderlessFullscreen(hwnd, wp != 0);
+      return 0;
+    }
+    // Alt+Enter arrives as WM_SYSKEYDOWN.
+    if (msg == WM_SYSKEYDOWN && wp == VK_RETURN && !(lp & (1 << 30))) {
+      menu::ToggleFullscreen();
+      return 0;
+    }
     // F9 (dump the next frame to logs/native_dump) and F10 (screenshot to logs/shots) are polled
     // by the window thread's timer, so they work from the SDK's window too (shadow mode).
     // Settings menu: Esc toggles it; mouse and navigation keys while it is open (menu.h).
@@ -351,7 +382,10 @@ class Renderer {
             if (f8 && !f8_down) key_replay_ = true;
             if (f9 && !f9_down) key_dump_ = true;
             if (f10 && !f10_down) key_shot_ = true;
-            if (f11 && !f11_down) CycleDiagMode();
+            if (f11 && !f11_down) {
+              if (GetAsyncKeyState(VK_CONTROL) & 0x8000) CycleDiagMode();
+              else menu::ToggleFullscreen();
+            }
             f8_down = f8, f9_down = f9, f10_down = f10, f11_down = f11;
           }
           continue;
@@ -546,7 +580,14 @@ class Renderer {
                   if (e->key.scancode == SDL_SCANCODE_F9 || e->key.scancode == SDL_SCANCODE_N) key_dump_ = true;
                   // M as well: no fn key needed on Mac laptops, and no pad button uses it (mnk_mode).
                   if (e->key.scancode == SDL_SCANCODE_F10 || e->key.scancode == SDL_SCANCODE_M) key_shot_ = true;
-                  if (e->key.scancode == SDL_SCANCODE_F11) CycleDiagMode();
+                  // F11 / Alt+Enter: fullscreen. Ctrl+F11: the diagnostic view modes.
+                  if (e->key.scancode == SDL_SCANCODE_F11) {
+                    if (e->key.mod & SDL_KMOD_CTRL) CycleDiagMode();
+                    else menu::ToggleFullscreen();
+                  }
+                  if ((e->key.scancode == SDL_SCANCODE_RETURN || e->key.scancode == SDL_SCANCODE_KP_ENTER) &&
+                      (e->key.mod & SDL_KMOD_ALT))
+                    menu::ToggleFullscreen();
                   // Android's Back button arrives as AC_BACK: it opens the settings menu too.
                   if (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) menu::OnEscape();
                 }
@@ -964,6 +1005,30 @@ class Renderer {
   } submitter_;
   std::mutex present_mutex_;
 
+  // gtav_fullscreen (menu, F11, Alt+Enter, gtav_settings.ini) -> the window. Desktop only: phones
+  // are always fullscreen. The swap chain follows through needsResize.
+  bool fullscreen_applied_ = false;
+  void ApplyFullscreen() {
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+    const bool want = REXCVAR_GET(gtav_fullscreen);
+    if (want == fullscreen_applied_ || REXCVAR_GET(gtav_native_hidden) || !window_) return;
+    fullscreen_applied_ = want;
+    REXLOG_INFO("[native] fullscreen {}", want ? "on" : "off");
+#ifdef _WIN32
+    PostMessageW(window_, kMsgFullscreen, want ? 1 : 0, 0);
+#else
+    SDL_RunOnMainThread(
+        [](void* w) {
+          auto* win = static_cast<SDL_Window*>(w);
+          const bool on = REXCVAR_GET(gtav_fullscreen);
+          SDL_SetWindowFullscreenMode(win, nullptr);  // borderless at the desktop resolution
+          SDL_SetWindowFullscreen(win, on);
+        },
+        window_, false);
+#endif
+#endif
+  }
+
   void RetireAll() {
     submitter_.Drain();
     for (uint32_t i = 0; i < Backend::kFramesInFlight; i++) Retire((slot_ + i) % Backend::kFramesInFlight);
@@ -972,6 +1037,7 @@ class Renderer {
   // Two frames in flight: frame N+1 is recorded while the GPU runs frame N, so a frame costs
   // max(record, GPU) instead of record + GPU. Shot and dump frames are waited for at once.
   void Present(const FramePacket& frame) {
+    ApplyFullscreen();
     if (vsync_ != REXCVAR_GET(gtav_native_vsync)) {  // switched from the menu
       vsync_ = REXCVAR_GET(gtav_native_vsync);
       submitter_.Drain();
@@ -1232,7 +1298,7 @@ class Renderer {
       backend_.DrawCounter(list_, fps_value_, 8, 8, std::max(1u, h / 720), kSwapchainFormat);
     if (backend_ok_) {
       double frame_ms = fps_value_ ? 1000.0 / fps_value_ : 0.0;
-      if (ImDrawData* menu_data = menu::Frame(w, h, fps_value_, frame_ms))
+      if (ImDrawData* menu_data = menu::Frame(w, h, fps_value_, frame_ms, PendingShaders()))
         backend_.DrawMenu(list_, menu_data, kSwapchainFormat);
     }
     list_->barriers(plume::RenderBarrierStage::NONE,

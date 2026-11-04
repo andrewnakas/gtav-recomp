@@ -2715,6 +2715,9 @@ struct Backend::Impl {
     return present;
   }
 
+  // Longest wait for one shader still being compiled (WaitForShader).
+  static constexpr int kShaderWaitMs = 20000;
+
   RenderShader* Shader(uint64_t hash, bool pixel) {
     if (!hash) return nullptr;
     const bool tile_override = pixel && TileOverride(hash);
@@ -2751,6 +2754,18 @@ struct Backend::Impl {
       if (std::fread(data.data(), 1, data.size(), f) == data.size())
         shader = device->createShader(data.data(), data.size(), "main", RenderShaderFormat::SPIRV);
       std::fclose(f);
+    }
+    // Still being compiled (first launch): wait for it rather than skip the draw. The game draws some
+    // things only once (lighting went black for the whole session, issues #4/#10).
+    if (!shader && WaitForShader(fmt::format("{}_{:016X}", pixel ? "ps" : "vs", hash), kShaderWaitMs)) {
+      if (FILE* f = std::fopen(path.c_str(), "rb")) {
+        std::fseek(f, 0, SEEK_END);
+        data.resize(size_t(std::ftell(f)));
+        std::fseek(f, 0, SEEK_SET);
+        if (std::fread(data.data(), 1, data.size(), f) == data.size())
+          shader = device->createShader(data.data(), data.size(), "main", RenderShaderFormat::SPIRV);
+        std::fclose(f);
+      }
     }
     // vs_<hash>.indirect (written by the shader census): the shader fetches vertices by a computed
     // index and needs the raw streams (Draw fills its vfetchIndirect records).
