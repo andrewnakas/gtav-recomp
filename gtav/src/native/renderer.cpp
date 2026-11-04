@@ -483,6 +483,58 @@ class Renderer {
   }
 #endif
 
+#if !defined(_WIN32) && !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+  // Keyboard and mouse for the game (the SDK's mnk driver, --mnk_mode / --mnk_mouse) listen to the
+  // SDK's own window, which "on" mode hides: the native window's keys, mouse and focus never
+  // reached them (issue #2). Re-sent as the SDK window's events; not while the Esc menu is open.
+  static inline SDL_WindowID sdk_window_id_ = 0;
+  static inline SDL_WindowID native_window_id_ = 0;
+  static inline std::atomic<bool> native_focused_{true};
+  static void ForwardToSdk(const SDL_Event* e) {
+    if (!sdk_window_id_ || !native_window_id_) return;
+    SDL_Event copy = *e;
+    SDL_WindowID* id = nullptr;
+    switch (e->type) {
+      case SDL_EVENT_KEY_DOWN:
+      case SDL_EVENT_KEY_UP:
+        id = &copy.key.windowID;
+        break;
+      case SDL_EVENT_MOUSE_MOTION: id = &copy.motion.windowID; break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      case SDL_EVENT_MOUSE_BUTTON_UP: id = &copy.button.windowID; break;
+      case SDL_EVENT_MOUSE_WHEEL: id = &copy.wheel.windowID; break;
+      case SDL_EVENT_WINDOW_FOCUS_GAINED:
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        if (e->window.windowID == native_window_id_) native_focused_ = e->type == SDL_EVENT_WINDOW_FOCUS_GAINED;
+        id = &copy.window.windowID;
+        break;
+      default: return;
+    }
+    if (*id != native_window_id_) return;
+    const bool focus = e->type == SDL_EVENT_WINDOW_FOCUS_GAINED || e->type == SDL_EVENT_WINDOW_FOCUS_LOST;
+    // While the menu is open the game sees nothing (key-ups still go through: no stuck keys).
+    if (!focus && menu::IsOpen() && e->type != SDL_EVENT_KEY_UP && e->type != SDL_EVENT_MOUSE_BUTTON_UP) return;
+    *id = sdk_window_id_;
+    SDL_PushEvent(&copy);
+  }
+
+  // --mnk_mouse: mouse look needs the pointer locked to the native window (the SDK locks its
+  // hidden one). Released while the menu is open or the window is in the background.
+  bool mouse_locked_ = false;
+  static inline std::atomic<bool> mouse_lock_wanted_{false};
+  void UpdateMouseLock() {
+    if (!window_ || REXCVAR_GET(gtav_native_hidden)) return;
+    const bool want = rex::cvar::GetFlagByName("mnk_mode") == "true" &&
+                      rex::cvar::GetFlagByName("mnk_mouse") == "true" && !menu::IsOpen() && native_focused_;
+    if (want == mouse_locked_) return;
+    mouse_locked_ = want;
+    mouse_lock_wanted_ = want;
+    SDL_RunOnMainThread(
+        [](void* w) { SDL_SetWindowRelativeMouseMode(static_cast<SDL_Window*>(w), mouse_lock_wanted_.load()); },
+        window_, false);
+  }
+#endif
+
   bool Init() {
 #ifdef __ANDROID__
     // Plume reports its Vulkan failures on stderr, which Android discards.
@@ -502,6 +554,7 @@ class Renderer {
             int count = 0;
             if (SDL_Window** windows = SDL_GetWindows(&count)) {
               for (int i = 0; i < count; i++) SDL_HideWindow(windows[i]);
+              if (count > 0) sdk_window_id_ = SDL_GetWindowID(windows[0]);
               SDL_free(windows);
             }
           }
@@ -539,6 +592,7 @@ class Renderer {
           r->window_ = SDL_CreateWindow(on ? "GTA V" : "GTA V - native renderer (shadow)", 1280, 720,
                                         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
                                             (REXCVAR_GET(gtav_native_hidden) ? SDL_WINDOW_HIDDEN : 0));
+          if (r->window_ && on) native_window_id_ = SDL_GetWindowID(r->window_);
 #endif
 #ifdef __APPLE__
           // Plume's Vulkan backend (MoltenVK) on macOS takes the NSWindow and a CAMetalLayer.
@@ -592,6 +646,7 @@ class Renderer {
                   if (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) menu::OnEscape();
                 }
                 MenuInput(e);
+                ForwardToSdk(e);
                 return true;
               },
               nullptr);
@@ -1038,6 +1093,9 @@ class Renderer {
   // max(record, GPU) instead of record + GPU. Shot and dump frames are waited for at once.
   void Present(const FramePacket& frame) {
     ApplyFullscreen();
+#if !defined(_WIN32) && !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+    UpdateMouseLock();
+#endif
     if (vsync_ != REXCVAR_GET(gtav_native_vsync)) {  // switched from the menu
       vsync_ = REXCVAR_GET(gtav_native_vsync);
       submitter_.Drain();

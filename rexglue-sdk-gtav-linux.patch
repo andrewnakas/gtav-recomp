@@ -374,7 +374,7 @@ index 0c334f8..8a62c96 100644
  //=============================================================================
  // Setjmp/Longjmp
 diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
-index 20a2cd8..6aef51f 100644
+index 20a2cd8..2689059 100644
 --- a/src/audio/sdl/sdl_audio_driver.cpp
 +++ b/src/audio/sdl/sdl_audio_driver.cpp
 @@ -11,10 +11,19 @@
@@ -397,7 +397,7 @@ index 20a2cd8..6aef51f 100644
  #include <rex/audio/downmix.h>
  #include <rex/audio/flags.h>
  #include <rex/audio/sdl/sdl_audio_driver.h>
-@@ -24,7 +33,36 @@
+@@ -24,7 +33,35 @@
  #include <rex/perf/counter.h>
  #include <SDL3/SDL.h>
  
@@ -418,12 +418,11 @@ index 20a2cd8..6aef51f 100644
  REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
 +REXCVAR_DEFINE_BOOL(audio_release_pacing, REX_AUDIO_PACING_DEFAULT, "Audio",
 +                    "Hand consumed frames back to the guest one per 5.3 ms instead of in bursts per device callback");
-+// Android: phones are stereo, and a 6-channel stream costs the audio server ~40% of a core to fold.
-+#if defined(__APPLE__) || defined(__ANDROID__)
++// On everywhere: phones are stereo (a 6-channel stream cost Android's audio server ~40% of a core to
++// fold), and devices that report 6 channels for stereo outputs (macOS speakers, Windows "5.1"
++// headsets and virtual surround, some HDMI sinks) fold it themselves without the centre channel:
++// no cutscene dialogue (gtav issue #3). Real 5.1 systems: --audio_force_stereo=false.
 +#define REX_AUDIO_FORCE_STEREO_DEFAULT true
-+#else
-+#define REX_AUDIO_FORCE_STEREO_DEFAULT false
-+#endif
 +REXCVAR_DEFINE_BOOL(audio_force_stereo, REX_AUDIO_FORCE_STEREO_DEFAULT, "Audio",
 +                    "Submit the stereo fold even when the device reports more channels (macOS reports 6 for "
 +                    "built-in stereo speakers and its own 5.1 fold drops the centre channel: no dialogue)");
@@ -434,7 +433,7 @@ index 20a2cd8..6aef51f 100644
  
  namespace rex::audio::sdl {
  
-@@ -39,6 +77,12 @@ SDLAudioDriver::~SDLAudioDriver() {
+@@ -39,6 +76,12 @@ SDLAudioDriver::~SDLAudioDriver() {
  bool SDLAudioDriver::Initialize() {
    // Set audio category for proper OS audio handling
    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
@@ -447,7 +446,7 @@ index 20a2cd8..6aef51f 100644
  
    // Set app name for audio device identification
    SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING, "rexglue");
-@@ -49,6 +93,25 @@ bool SDLAudioDriver::Initialize() {
+@@ -49,6 +92,25 @@ bool SDLAudioDriver::Initialize() {
    }
    sdl_initialized_ = true;
  
@@ -473,7 +472,7 @@ index 20a2cd8..6aef51f 100644
    SDL_AudioSpec desired_spec = {};
    SDL_AudioSpec obtained_spec = {};
    desired_spec.freq = frame_frequency_;
-@@ -59,12 +122,14 @@ bool SDLAudioDriver::Initialize() {
+@@ -59,12 +121,14 @@ bool SDLAudioDriver::Initialize() {
                                            SDLCallback, this);
    if (!sdl_stream_) {
      REXAPU_ERROR("SDL_OpenAudioDeviceStream() failed: {}", SDL_GetError());
@@ -488,7 +487,7 @@ index 20a2cd8..6aef51f 100644
      return false;
    }
  
-@@ -75,7 +140,7 @@ bool SDLAudioDriver::Initialize() {
+@@ -75,7 +139,7 @@ bool SDLAudioDriver::Initialize() {
  
    // A 1-channel device gets the stereo fold too, then SDL collapses to mono.
    // Handing it a 6ch stream instead would use SDL's own downmix.
@@ -497,7 +496,7 @@ index 20a2cd8..6aef51f 100644
      SDL_DestroyAudioStream(sdl_stream_);
      sdl_stream_ = nullptr;
      desired_spec.channels = 2;
-@@ -84,12 +149,14 @@ bool SDLAudioDriver::Initialize() {
+@@ -84,12 +148,14 @@ bool SDLAudioDriver::Initialize() {
                                              SDLCallback, this);
      if (!sdl_stream_) {
        REXAPU_ERROR("SDL_OpenAudioDeviceStream() stereo fallback failed: {}", SDL_GetError());
@@ -514,7 +513,7 @@ index 20a2cd8..6aef51f 100644
      }
    }
  
-@@ -103,12 +170,93 @@ bool SDLAudioDriver::Initialize() {
+@@ -103,12 +169,93 @@ bool SDLAudioDriver::Initialize() {
  
    if (!SDL_ResumeAudioDevice(sdl_device)) {
      REXAPU_ERROR("SDL_ResumeAudioDevice() failed: {}", SDL_GetError());
@@ -608,7 +607,7 @@ index 20a2cd8..6aef51f 100644
  void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
    const auto input_frame = memory_->TranslateVirtual<float*>(frame_ptr);
    float* output_frame;
-@@ -139,6 +287,14 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
+@@ -139,6 +286,14 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
  }
  
  void SDLAudioDriver::Shutdown() {
@@ -623,7 +622,7 @@ index 20a2cd8..6aef51f 100644
    if (sdl_stream_) {
      SDL_DestroyAudioStream(sdl_stream_);
      sdl_stream_ = nullptr;
-@@ -158,6 +314,58 @@ void SDLAudioDriver::Shutdown() {
+@@ -158,6 +313,58 @@ void SDLAudioDriver::Shutdown() {
    }
  }
  
@@ -682,7 +681,7 @@ index 20a2cd8..6aef51f 100644
  void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
                                   [[maybe_unused]] int total_amount) {
    SCOPE_profile_cpu_f("apu");
-@@ -178,15 +386,33 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+@@ -178,15 +385,33 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
    const StereoFold fold = GetStereoFold();
    const SurroundMix mix = GetSurroundMix();
    const float gain = GetOutputGain();
@@ -716,7 +715,7 @@ index 20a2cd8..6aef51f 100644
        if (!SDL_PutAudioStreamData(stream, data, len)) {
          REXAPU_ERROR("SDL_PutAudioStreamData() failed while filling silence: {}", SDL_GetError());
          break;
-@@ -195,9 +421,12 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+@@ -195,9 +420,12 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
      } else {
        auto buffer = driver->frames_queued_.front();
        driver->frames_queued_.pop();
@@ -732,7 +731,7 @@ index 20a2cd8..6aef51f 100644
          switch (driver->sdl_device_channels_) {
            case 2:
              conversion::sequential_6_BE_to_interleaved_2_LE(data, buffer, channel_samples_, fold,
-@@ -211,6 +440,8 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+@@ -211,6 +439,8 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
              assert_unhandled_case(driver->sdl_device_channels_);
              break;
          }
@@ -741,7 +740,7 @@ index 20a2cd8..6aef51f 100644
        }
        if (!SDL_PutAudioStreamData(stream, data, len)) {
          REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
-@@ -219,8 +450,12 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+@@ -219,8 +449,12 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
        }
        driver->frames_unused_.push(buffer);
  

@@ -60,6 +60,9 @@ constexpr const char* kSettings[] = {
 #if !GTAV_MENU_PHONE
     "gtav_fullscreen",
     "gtav_native_render_scale",
+    "mnk_mouse",
+    "mnk_sensitivity",
+    "audio_force_stereo",
 #endif
 };
 
@@ -253,6 +256,29 @@ void Build(uint32_t fps, double frame_ms) {
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Lower: textures the game streams in show up sooner (fewer gray blocks), more CPU.");
   }
+#if !GTAV_MENU_PHONE
+  ImGui::Separator();
+  ImGui::TextUnformatted("Keyboard and mouse");
+  check("Mouse look", "mnk_mouse",
+        "The mouse turns the camera (right stick); the pointer is locked to the game window.\n"
+        "Esc (this menu) releases it.");
+  {
+    float sens = float(std::atof(rex::cvar::GetFlagByName("mnk_sensitivity").c_str()));
+    ImGui::SetNextItemWidth(200.0f * g_scale);
+    if (ImGui::SliderFloat("Mouse sensitivity", &sens, 0.1f, 5.0f, "%.2f")) {
+      rex::cvar::SetFlagByName("mnk_sensitivity", std::to_string(sens));
+      changed = true;
+    }
+  }
+  ImGui::TextDisabled("Move WASD, camera mouse or arrows, A=Space B=Backspace X=L Y=P,\n"
+                      "LT=Q RT=E LB=1 RB=3, Start=Enter Back=Tab, D-pad=Shift+arrows.");
+  ImGui::Separator();
+  ImGui::TextUnformatted("Sound");
+  check("Stereo mix", "audio_force_stereo",
+        "On: the game's 5.1 mix is folded to stereo here (dialogue from the centre channel kept).\n"
+        "Off: 5.1 goes to the device when it reports more than 2 channels (real surround systems).\n"
+        "Takes effect the next time the game starts.");
+#endif
   ImGui::Separator();
   check("Touch controls", "gtav_touch_controls", "The on-screen gamepad (hidden while a controller is connected).");
   ImGui::TextDisabled("Controller: RB + Back opens/closes this menu; D-pad + A to change, B to close.");
