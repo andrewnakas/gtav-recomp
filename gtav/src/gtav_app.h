@@ -44,6 +44,10 @@ class GtavApp : public rex::ReXApp {
   // void OnPostInitLogging() override {}
   // Adds the on-screen gamepad (gtav_touch_controls) next to the SDK's pad and keyboard drivers.
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    // gtav_settings.ini (Esc menu) before the runtime starts: the language (read by the game at
+    // boot) and the stereo mix (audio device opened at setup) apply from it. The renderer loads
+    // it again when it starts.
+    gtav::native::menu::LoadSettings();
     config.input_factory = [](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
       auto input = rex::input::CreateDefaultInputSystem(tool_mode);
       if (!tool_mode) input->AddDriver(gtav::native::touch::CreateDriver());

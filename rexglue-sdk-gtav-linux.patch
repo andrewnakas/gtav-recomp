@@ -2866,18 +2866,34 @@ index c7c440d..95eaccf 100644
    sdl_pumpevents_queued_.compare_exchange_strong(is_queued, true);
    if (!is_queued) {
 diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
-index 1fda053..fe2e5e3 100644
+index 1fda053..7c65432 100644
 --- a/src/kernel/xam/xam_info.cpp
 +++ b/src/kernel/xam/xam_info.cpp
-@@ -20,6 +20,7 @@
+@@ -19,7 +19,11 @@
+ #include <rex/system/user_module.h>
  #include <rex/system/xenumerator.h>
  #include <rex/system/xthread.h>
++#include <rex/cvar.h>
++
++REXCVAR_DECLARE(uint32_t, user_language);
  #include <rex/system/xtypes.h>
 +#include <rex/kernel/xboxkrnl/threading.h>
  
  #if REX_PLATFORM_WIN32
  #include <windows.h>
-@@ -322,10 +323,15 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
+@@ -183,6 +187,11 @@ u32 XGetGameRegion_entry() {
+ }
+ 
+ u32 XGetLanguage_entry() {
++  // --user_language (1 English, 2 Japanese, 3 German, 4 French, 5 Spanish, 6 Italian, 7 Korean,
++  // 8 Traditional Chinese, 9 Portuguese, 10 Simplified Chinese, 11 Polish, 12 Russian): the
++  // console's language setting, which games pick their text from.
++  const uint32_t user = REXCVAR_GET(user_language);
++  if (user > uint32_t(XLanguage::kInvalid) && user < uint32_t(XLanguage::kMaxLanguages)) return user;
+   auto desired_language = XLanguage::kEnglish;
+ 
+   // Switch the language based on game region.
+@@ -322,10 +331,15 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
    return X_STATUS_SUCCESS;
  }
  

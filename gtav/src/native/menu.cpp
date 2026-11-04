@@ -64,6 +64,7 @@ constexpr const char* kSettings[] = {
     "mnk_sensitivity",
     "audio_force_stereo",
 #endif
+    "user_language",
 };
 
 std::filesystem::path SettingsPath() { return ExeDir() / "gtav_settings.ini"; }
@@ -279,6 +280,23 @@ void Build(uint32_t fps, double frame_ms) {
         "Off: 5.1 goes to the device when it reports more than 2 channels (real surround systems).\n"
         "Takes effect the next time the game starts.");
 #endif
+  ImGui::Separator();
+  {
+    // The console language (XGetLanguage): the game's text and menus. Read when the game starts.
+    static const char* kLanguages[] = {"English", "Japanese", "German", "French", "Spanish", "Italian", "Korean",
+                                       "Chinese (Traditional)", "Portuguese", "Chinese (Simplified)", "Polish",
+                                       "Russian"};
+    static const int started = std::atoi(rex::cvar::GetFlagByName("user_language").c_str());
+    const int now = std::atoi(rex::cvar::GetFlagByName("user_language").c_str());
+    int choice = now >= 1 && now <= 12 ? now - 1 : 0;
+    ImGui::SetNextItemWidth(260.0f * g_scale);
+    if (ImGui::Combo("Language", &choice, kLanguages, 12)) {
+      rex::cvar::SetFlagByName("user_language", std::to_string(choice + 1));
+      changed = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Text and menus (speech stays English). Applied at the next start.");
+    if (now != started) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Restart the game to apply the new language.");
+  }
   ImGui::Separator();
   check("Touch controls", "gtav_touch_controls", "The on-screen gamepad (hidden while a controller is connected).");
   ImGui::TextDisabled("Controller: RB + Back opens/closes this menu; D-pad + A to change, B to close.");
