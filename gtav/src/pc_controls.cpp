@@ -29,6 +29,8 @@
 #endif
 
 #include <array>
+#include <sstream>
+#include <cstdlib>
 #include <map>
 #include <bit>
 #include <atomic>
@@ -64,6 +66,11 @@ REX_EXTERN(sub_82D28BB8);         // REQUEST_SCRIPT(name)
 REX_EXTERN(sub_82D28BD8);         // HAS_SCRIPT_LOADED(name)
 REX_EXTERN(sub_82D28BC8);         // SET_SCRIPT_AS_NO_LONGER_NEEDED(name)
 REX_EXTERN(sub_82D1FEC8);         // GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH(hash)
+REX_EXTERN(sub_82CF0CC0);         // REQUEST_MODEL(hash)
+REX_EXTERN(sub_82CF0A90);         // HAS_MODEL_LOADED(hash)
+REX_EXTERN(sub_82CE8710);         // SET_PLAYER_MODEL(player, hash)
+REX_EXTERN(sub_82CE9A20);         // PLAYER_ID()
+REX_EXTERN(sub_82CF0AE0);         // SET_MODEL_AS_NO_LONGER_NEEDED(hash)
 REX_EXTERN(sub_83527850);         // START_NEW_SCRIPT(name, stack size) (registered via sub_83524A28)
 
 REXCVAR_DEFINE_BOOL(gtav_trace_cutscene_audio, false, "GTAV",
@@ -147,6 +154,7 @@ uint32_t ScratchString(PPCContext& ctx, uint8_t* base, const std::string& text) 
   return at;
 }
 
+std::string g_pending_model;  // debug command "model <name>": becomes the player model once loaded
 std::string g_pending_mission;  // debug command "mission <script>": started once loaded
 int g_mission_tries = 0;
 
@@ -276,14 +284,112 @@ REX_HOOK_RAW(sub_82CE9CA8) {
         const auto path = gtav::native::ExeDir() / "logs" / "native_cmd";
         std::error_code ec;
         if (std::filesystem::exists(path, ec)) {
-          std::string cmd, arg;
-          { std::ifstream in(path); in >> cmd >> arg; }
+          std::string cmd, arg, rest;
+          {
+            std::ifstream in(path);
+            in >> cmd >> arg;
+            std::getline(in, rest);
+            if (!rest.empty()) std::ofstream(path.string() + ".args") << rest;
+          }
           std::filesystem::remove(path, ec);
           if (cmd == "mission") {
             g_pending_mission = arg;
             g_mission_tries = 0;
           }
+          if (cmd == "model") g_pending_model = arg;  // e.g. player_zero (Michael), player_one, player_two
           if (cmd == "report") gtav::bug_report::Create("debug command");
+          if (cmd == "thread") {  // "thread <id>": the scrThread object's first 64 words
+            const uint32_t table = Load32(base, 0x83DDD928), count = Load32(base, 0x83DDD928 + 4) >> 16;
+            for (uint32_t i = 0; i < count && i < 512; ++i) {
+              const uint32_t t = Load32(base, table + 4 * i);
+              if (!t || Load32(base, t + 4) != uint32_t(std::atoi(arg.c_str()))) continue;
+              std::string words;
+              for (uint32_t o = 0; o < 256; o += 4) words += fmt::format(" {:08X}", Load32(base, t + o));
+              REXLOG_INFO("[controls] debug thread {} at {:08X}:{}", arg, t, words);
+            }
+          }
+          if (cmd == "find") {  // "find <hex>": guest addresses holding that big-endian word
+            const uint32_t want = uint32_t(std::strtoul(arg.c_str(), nullptr, 16));
+            std::vector<uint8_t> chunk(1u << 20);
+            std::string hits;
+            int found = 0;
+            for (uint64_t a = 0x40000000; a < 0x100000000ull && found < 64; a += chunk.size()) {
+              if (a >= 0x80000000ull && a < 0x82000000ull) continue;
+              if (!gtav::native::SafeReadMemory(chunk.data(), base + a, chunk.size())) continue;
+              for (size_t o = 0; o + 4 <= chunk.size() && found < 64; o += 4) {
+                const uint32_t v = uint32_t(chunk[o]) << 24 | uint32_t(chunk[o + 1]) << 16 |
+                                   uint32_t(chunk[o + 2]) << 8 | chunk[o + 3];
+                if (v == want) hits += fmt::format(" {:08X}", uint32_t(a + o)), found++;
+              }
+            }
+            REXLOG_INFO("[controls] debug find {}: {}", arg, hits);
+          }
+          if (cmd == "words") {  // "words <hex address>": 64 words there
+            const uint32_t at = uint32_t(std::strtoul(arg.c_str(), nullptr, 16));
+            std::string words;
+            for (uint32_t o = 0; o < 256; o += 4) words += fmt::format(" {:08X}", Load32(base, at + o));
+            REXLOG_INFO("[controls] debug words {}:{}", arg, words);
+          }
+          if (cmd == "dumpscript") {  // "dumpscript <program>": its code, natives, statics, strings
+            uint32_t prog = 0;  // by name: the scrProgram whose hash (+56) matches, vtable 820C98C0
+            {
+              const uint32_t want = Joaat(arg);
+              std::vector<uint8_t> chunk(1u << 20);
+              for (uint64_t a = 0xC0000000ull; a < 0x100000000ull && !prog; a += chunk.size()) {
+                if (!gtav::native::SafeReadMemory(chunk.data(), base + a, chunk.size())) continue;
+                for (size_t o = 56; o + 4 <= chunk.size(); o += 4) {
+                  const uint32_t v = uint32_t(chunk[o]) << 24 | uint32_t(chunk[o + 1]) << 16 |
+                                     uint32_t(chunk[o + 2]) << 8 | chunk[o + 3];
+                  if (v == want && Load32(base, uint32_t(a + o - 56)) == 0x820C98C0) {
+                    prog = uint32_t(a + o - 56);
+                    break;
+                  }
+                }
+              }
+            }
+            if (!prog) REXLOG_INFO("[controls] debug dumpscript {}: program not found", arg);
+            if (prog) {
+            const uint32_t code_pages = Load32(base, prog + 8), code_len = Load32(base, prog + 16);
+            const uint32_t statics_count = Load32(base, prog + 24), natives_count = Load32(base, prog + 32);
+            const uint32_t statics = Load32(base, prog + 36), natives = Load32(base, prog + 44);
+            const uint32_t string_pages = Load32(base, prog + 68), strings_len = Load32(base, prog + 72);
+            const auto out_path = gtav::native::ExeDir() / "logs" / fmt::format("script_{:08X}.bin", Load32(base, prog + 56));
+            std::ofstream out(out_path, std::ios::binary);
+            auto put = [&](uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+            put(code_len), put(natives_count), put(statics_count), put(strings_len);
+            for (uint32_t off = 0; off < code_len; off += 0x4000) {
+              const uint32_t page = Load32(base, code_pages + 4 * (off / 0x4000));
+              out.write(reinterpret_cast<const char*>(base + page), std::min<uint32_t>(0x4000, code_len - off));
+            }
+            for (uint32_t i = 0; i < natives_count; ++i) put(Load32(base, natives + 4 * i));
+            for (uint32_t i = 0; i < statics_count; ++i) put(Load32(base, statics + 4 * i));
+            for (uint32_t off = 0; off < strings_len; off += 0x4000) {
+              const uint32_t page = Load32(base, string_pages + 4 * (off / 0x4000));
+              out.write(reinterpret_cast<const char*>(base + page), std::min<uint32_t>(0x4000, strings_len - off));
+            }
+            REXLOG_INFO("[controls] debug dumpscript {:08X}: code {} natives {} statics {} strings {} -> {}", prog,
+                        code_len, natives_count, statics_count, strings_len, out_path.string());
+            }
+          }
+          if (cmd == "static") {  // "static <thread id> <index> [value]": a script static (stack base)
+            std::string rest;
+            {
+              std::ifstream in(path.string() + ".args");
+              std::getline(in, rest);
+            }
+            std::istringstream args(arg + " " + rest);
+            uint32_t tid = 0, index = 0;
+            std::string value;
+            args >> tid >> index >> value;
+            const uint32_t table = Load32(base, 0x83DDD928), count = Load32(base, 0x83DDD928 + 4) >> 16;
+            for (uint32_t i = 0; i < count && i < 512; ++i) {
+              const uint32_t t = Load32(base, table + 4 * i);
+              if (!t || Load32(base, t + 4) != tid) continue;
+              const uint32_t at = Load32(base, t + 84) + 4 * index;
+              if (!value.empty()) Store32(base, at, uint32_t(std::stoll(value)));
+              REXLOG_INFO("[controls] debug static {}[{}] = {}", tid, index, int32_t(Load32(base, at)));
+            }
+          }
           if (cmd == "stacks") {  // the script stack pool (sub_83525480): size -> free/total
             const uint32_t table = Load32(base, 0x83DDDB38);
             const uint32_t count = Load32(base, 0x83DDDB38 + 4) >> 16;
@@ -317,6 +423,16 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             if (vehicle) Call(ctx, base, sub_82D0C3D8, {ped, vehicle, uint32_t(-1)});
           }
         }
+      }
+    }
+    if (!g_pending_model.empty()) {
+      const uint32_t hash = Joaat(g_pending_model);
+      Call(ctx, base, sub_82CF0CC0, {hash});
+      if (Call(ctx, base, sub_82CF0A90, {hash}) & 0xFF) {
+        Call(ctx, base, sub_82CE8710, {Call(ctx, base, sub_82CE9A20, {}), hash});
+        Call(ctx, base, sub_82CF0AE0, {hash});
+        REXLOG_INFO("[controls] debug model: player is now {}", g_pending_model);
+        g_pending_model.clear();
       }
     }
     if (!g_pending_mission.empty()) {  // load, then start (GTA V mission stacks come in pools)
