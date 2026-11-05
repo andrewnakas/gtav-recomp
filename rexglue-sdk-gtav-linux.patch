@@ -249,10 +249,10 @@ index 1cb3faa..a68b9cc 100644
  
  /// Create a default InputSystem with SDL + NOP drivers.
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
-index c8751b7..9feecb8 100644
+index c8751b7..8642eba 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
 +++ b/include/rex/input/mnk/mnk_input_driver.h
-@@ -15,15 +15,54 @@
+@@ -15,15 +15,62 @@
  #include <rex/ui/window_listener.h>
  
  #include <atomic>
@@ -300,6 +300,14 @@ index c8751b7..9feecb8 100644
 +// Mouse look per context: sensitivity factor (0 = unchanged) and inverted vertical axis.
 +void SetMouseOptions(InputContext context, float scale, bool invert);
 +
++// Input from a window the driver is not attached to (the title's own game window, e.g. a Win32
++// window on Windows): virtual-key codes (mouse buttons are VK_LBUTTON/RBUTTON/MBUTTON), relative
++// mouse motion in pixels, wheel in WHEEL_DELTA units (120 a detent), focus. Any thread.
++void InjectKey(uint16_t virtual_key, bool down);
++void InjectMouseMotion(float dx, float dy);
++void InjectMouseWheel(int32_t delta);
++void InjectFocus(bool focused);
++
 +// PC actions the console pad has no button for, carried out by the title: the next request, or 0.
 +// 1-9 = weapon category key, kWeaponNext / kWeaponPrevious = mouse wheel, kSwitch* = F5-F7.
 +constexpr int kWeaponNext = 100, kWeaponPrevious = 101;
@@ -307,7 +315,7 @@ index c8751b7..9feecb8 100644
  
  class MnkInputDriver final : public InputDriver,
                               public rex::ui::WindowInputListener,
-@@ -50,6 +89,7 @@ class MnkInputDriver final : public InputDriver,
+@@ -50,6 +97,7 @@ class MnkInputDriver final : public InputDriver,
    void OnMouseDown(rex::ui::MouseEvent& e) override;
    void OnMouseUp(rex::ui::MouseEvent& e) override;
    void OnMouseMove(rex::ui::MouseEvent& e) override;
@@ -315,15 +323,24 @@ index c8751b7..9feecb8 100644
  
    // WindowListener
    void OnClosing(rex::ui::UIEvent& e) override;
-@@ -60,6 +100,7 @@ class MnkInputDriver final : public InputDriver,
+@@ -60,6 +108,16 @@ class MnkInputDriver final : public InputDriver,
    bool IsEnabled() const;
    void SetKeyState(uint16_t vk, bool down);
    void EnqueueKeystroke(uint16_t vk_pad, bool down);
 +  void MapPcLayout(uint16_t* buttons, uint8_t* lt, uint8_t* rt, int32_t* lx, int32_t* ly);
++
++ public:
++  // InjectKey & co. (see above).
++  void Inject(uint16_t vk, bool down);
++  void InjectMotion(float dx, float dy);
++  void InjectWheel(int32_t delta);
++  void InjectFocusState(bool focused);
++
++ private:
  
    // Called from the guest thread. The rest of the capture path stays on the UI
    // thread, since every Window call in it reaches SDL.
-@@ -75,6 +116,15 @@ class MnkInputDriver final : public InputDriver,
+@@ -75,6 +133,15 @@ class MnkInputDriver final : public InputDriver,
  
    std::mutex state_mutex_;
    bool key_down_[256] = {};
@@ -3200,7 +3217,7 @@ index 813bb1c..36b32ae 100644
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..f97452a 100644
+index 3f9422d..9748af2 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
 @@ -22,6 +22,9 @@
@@ -3308,7 +3325,7 @@ index 3f9422d..f97452a 100644
  
  }  // namespace
  
-@@ -143,6 +161,91 @@ void SetMouseLookActive(bool active) {
+@@ -143,16 +161,147 @@ void SetMouseLookActive(bool active) {
    mouse_look_active.store(active, std::memory_order_relaxed);
  }
  
@@ -3400,7 +3417,64 @@ index 3f9422d..f97452a 100644
  bool IsMouseLookActive() {
    return mouse_look_active.load(std::memory_order_relaxed);
  }
-@@ -275,50 +378,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+ 
+ using rex::ui::VirtualKey;
+ 
++namespace {
++std::atomic<MnkInputDriver*> g_driver{nullptr};
++}  // namespace
++
++void InjectKey(uint16_t virtual_key, bool down) {
++  if (auto* d = g_driver.load()) d->Inject(virtual_key, down);
++}
++void InjectMouseMotion(float dx, float dy) {
++  if (auto* d = g_driver.load()) d->InjectMotion(dx, dy);
++}
++void InjectMouseWheel(int32_t delta) {
++  if (auto* d = g_driver.load()) d->InjectWheel(delta);
++}
++void InjectFocus(bool focused) {
++  if (auto* d = g_driver.load()) d->InjectFocusState(focused);
++}
++
++void MnkInputDriver::Inject(uint16_t vk, bool down) {
++  if (!IsEnabled()) return;
++  std::lock_guard lock(state_mutex_);
++  SetKeyState(vk, down);
++}
++void MnkInputDriver::InjectMotion(float dx, float dy) {
++  if (!IsEnabled()) return;
++  std::lock_guard lock(state_mutex_);
++  mouse_dx_ += dx;
++  mouse_dy_ += dy;
++}
++void MnkInputDriver::InjectWheel(int32_t delta) {
++  if (!IsEnabled()) return;
++  std::lock_guard lock(state_mutex_);
++  wheel_accum_ += delta;
++}
++void MnkInputDriver::InjectFocusState(bool focused) {
++  has_focus_ = focused;
++  if (!focused) {
++    std::lock_guard lock(state_mutex_);
++    std::memset(key_down_, 0, sizeof(key_down_));
++    mouse_dx_ = mouse_dy_ = 0.0f;
++  }
++}
++
+ MnkInputDriver::MnkInputDriver(rex::ui::Window* window, size_t window_z_order)
+-    : InputDriver(window, window_z_order) {}
++    : InputDriver(window, window_z_order) {
++  g_driver = this;
++}
+ 
+ MnkInputDriver::~MnkInputDriver() {
++  MnkInputDriver* self = this;
++  g_driver.compare_exchange_strong(self, nullptr);
+   // Detach handled by OnClosing; if window outlives the driver, clean up here.
+   DetachFromWindow();
+ }
+@@ -275,50 +424,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    std::lock_guard lock(state_mutex_);
  
    uint16_t buttons = 0;
@@ -3481,7 +3555,7 @@ index 3f9422d..f97452a 100644
  
    int32_t rx = 0;
    int32_t ry = 0;
-@@ -331,11 +422,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -331,11 +468,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
      ry -= INT16_MAX;
  
@@ -3510,7 +3584,7 @@ index 3f9422d..f97452a 100644
    }
    // Drained unconditionally: deltas keep accumulating in OnMouseMove while the
    // mouse is off, and toggling it on would otherwise dump the whole backlog
-@@ -558,6 +665,130 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+@@ -558,6 +711,130 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    }
  }
  

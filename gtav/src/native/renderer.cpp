@@ -22,6 +22,7 @@
 #endif
 
 #include <rex/cvar.h>
+#include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/ui/keybinds.h>
 #ifndef _WIN32
 #include <rex/ui/sdl_virtual_key.h>
@@ -261,6 +262,33 @@ class Renderer {
   static bool MnkMode() { return rex::cvar::GetFlagByName("mnk_mode") == "true"; }
 
 #ifdef _WIN32
+  static inline bool win_esc_was_menu_ = false;   // window thread: this Esc press was the menu's
+  static inline bool win_mouse_locked_ = false;   // window thread: pointer hidden + clipped (mouse look)
+  // --mnk_mouse: hide the pointer and pin it to the window's centre while the game window is in
+  // front and the menu is closed; raw input (WM_INPUT) carries the motion.
+  static void UpdateWinMouseLock(HWND hwnd) {
+    const bool want = MnkMode() && rex::cvar::GetFlagByName("mnk_mouse") == "true" && !menu::IsOpen() &&
+                      GetForegroundWindow() == hwnd && !IsIconic(hwnd);
+    if (want) {
+      RECT rc;
+      GetClientRect(hwnd, &rc);
+      POINT c{(rc.right - rc.left) / 2, (rc.bottom - rc.top) / 2};
+      ClientToScreen(hwnd, &c);
+      RECT pin{c.x, c.y, c.x + 1, c.y + 1};
+      ClipCursor(&pin);  // again each tick: the window may have moved or resized
+      if (!win_mouse_locked_) {
+        win_mouse_locked_ = true;
+        while (ShowCursor(FALSE) >= 0) {
+        }
+      }
+    } else if (win_mouse_locked_) {
+      win_mouse_locked_ = false;
+      ClipCursor(nullptr);
+      while (ShowCursor(TRUE) < 0) {
+      }
+    }
+  }
+
   static constexpr UINT kMsgFullscreen = WM_APP + 1;  // wParam 1 = borderless fullscreen, 0 = window
   static void SetBorderlessFullscreen(HWND hwnd, bool on) {
     static WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
@@ -304,6 +332,52 @@ class Renderer {
     if (msg == WM_SYSKEYDOWN && wp == VK_RETURN && !(lp & (1 << 30))) {
       menu::ToggleFullscreen();
       return 0;
+    }
+    // Keyboard and mouse for the game (--mnk_mode): the SDK's driver is fed directly, as this
+    // Win32 window is not one of its windows (SDL forwards on Linux/macOS, see ForwardToSdk).
+    if (MnkMode()) {
+      switch (msg) {
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+        case WM_KEYUP:
+        case WM_SYSKEYUP: {
+          const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+          const bool repeat = down && (lp & (1 << 30));
+          if (wp == VK_ESCAPE && down && !repeat) win_esc_was_menu_ = menu::IsOpen();
+          const bool menu_key = wp == VK_F1 || (wp == VK_ESCAPE && win_esc_was_menu_);
+          if (!menu_key && !repeat && (!menu::IsOpen() || !down))
+            rex::input::mnk::InjectKey(uint16_t(wp), down);
+          // Alt alone would open the window's system menu: keep it for the game (Alt+F4 still closes).
+          if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp != VK_F4) return 0;
+          break;
+        }
+        case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
+          const bool down = msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN;
+          const uint16_t vk = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP)   ? VK_LBUTTON
+                              : (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? VK_RBUTTON
+                                                                               : VK_MBUTTON;
+          if (!menu::IsOpen() || !down) rex::input::mnk::InjectKey(vk, down);
+          break;
+        }
+        case WM_MOUSEWHEEL:
+          if (!menu::IsOpen()) rex::input::mnk::InjectMouseWheel(GET_WHEEL_DELTA_WPARAM(wp));
+          break;
+        case WM_INPUT: {  // raw mouse motion: only while the pointer is locked for mouse look
+          if (!win_mouse_locked_) break;
+          RAWINPUT raw{};
+          UINT size = sizeof(raw);
+          if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) !=
+                  UINT(-1) &&
+              raw.header.dwType == RIM_TYPEMOUSE && !(raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+            rex::input::mnk::InjectMouseMotion(float(raw.data.mouse.lLastX), float(raw.data.mouse.lLastY));
+          break;
+        }
+        case WM_SETFOCUS: rex::input::mnk::InjectFocus(true); break;
+        case WM_KILLFOCUS: rex::input::mnk::InjectFocus(false); break;
+        default: break;
+      }
     }
     // F9 (dump the next frame to logs/native_dump) and F10 (screenshot to logs/shots) are polled
     // by the window thread's timer, so they work from the SDK's window too (shadow mode).
@@ -381,6 +455,10 @@ class Renderer {
         cv.notify_one();  // under the lock: the waiter's cv/mutex die once it returns
       }
       if (!hwnd) return;
+      {
+        RAWINPUTDEVICE mouse{0x01, 0x02, 0, hwnd};  // generic desktop / mouse: WM_INPUT motion
+        RegisterRawInputDevices(&mouse, 1, sizeof(mouse));
+      }
       const bool hidden = REXCVAR_GET(gtav_native_hidden);
       if (!hidden) {
         ShowWindow(hwnd, SW_SHOW);
@@ -404,6 +482,7 @@ class Renderer {
             if (f8 && !f8_down) key_replay_ = true;
             if (f9 && !f9_down) key_dump_ = true;
             if (f10 && !f10_down) key_shot_ = true;
+            if (!hidden) UpdateWinMouseLock(hwnd);
             if (f11 && !f11_down) {
               if (GetAsyncKeyState(VK_CONTROL) & 0x8000) CycleDiagMode();
               else menu::ToggleFullscreen();
