@@ -49,3 +49,17 @@ Decode that one buffer offline: dump the 86 packets (context input buffer 0 poin
 bytes) when it is submitted, and run it through the decoder from bit 5483 with tracing: frame
 lengths, packet skip counts (multi-stream XMA2 interleaving: `GetPacketSkipCount`, next packet =
 index + skip + 1), and where it gives up. Compare the 79/81-packet buffers, which decode.
+
+## Later the same day
+
+- Buffers dumped (`/tmp/xma_buf_*`, 64-byte register snapshot + packets): all stream blocks have
+  normal XMA2 packet headers (skip 0, metadata 1); the 86-packet one just has 11-13 frames/packet.
+- Per-frame trace: every context's first pass decodes 4 frames; with the one-frame carry delay that
+  is 3 x 4 = 12 output blocks = the whole 12-block ring, so write == read ("empty"). For the playing
+  block the game drains it at once; the pre-loaded block sat "full = empty".
+- `--xma_output_keep_free_block` (never fill the ring; default off) makes the 86-packet context hold
+  8 readable blocks, but the game still never reads it at the switch while it reads the 79/81 ones
+  (their contexts differ in output_buffer_padding: 3/2 vs 0 at submit time, and the 86 one is
+  submitted with read offset 32, the others with a seek offset). Still stops at 59 668 ms.
+- Next: what makes the game start reading a pre-loaded channel (look for the guest code reading
+  output_buffer_read_offset / write_offset of these contexts around the block switch).
