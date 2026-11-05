@@ -29,6 +29,7 @@
 #endif
 
 #include <array>
+#include <map>
 #include <bit>
 #include <atomic>
 #include <chrono>
@@ -283,6 +284,20 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             g_mission_tries = 0;
           }
           if (cmd == "report") gtav::bug_report::Create("debug command");
+          if (cmd == "stacks") {  // the script stack pool (sub_83525480): size -> free/total
+            const uint32_t table = Load32(base, 0x83DDDB38);
+            const uint32_t count = Load32(base, 0x83DDDB38 + 4) >> 16;
+            std::map<uint32_t, std::pair<int, int>> sizes;
+            for (uint32_t i = 0; i < count && i < 4096; ++i) {
+              const uint32_t e = table + 12 * i;
+              auto& [free_count, total] = sizes[Load32(base, e + 4)];
+              total++;
+              if (!Load32(base, e)) free_count++;
+            }
+            std::string line;
+            for (auto& [size, ft] : sizes) line += fmt::format(" {}:{}/{}", size, ft.first, ft.second);
+            REXLOG_INFO("[controls] debug stacks ({} entries, size:free/total):{}", count, line);
+          }
           if (cmd == "threads")  // "threads family3": how many threads run that script
             REXLOG_INFO("[controls] debug threads '{}': {}", arg,
                         Call(ctx, base, sub_82D1FEC8, {Joaat(arg)}));
@@ -312,7 +327,7 @@ REX_HOOK_RAW(sub_82CE9CA8) {
         Call(ctx, base, sub_82D28BB8, {ScratchString(ctx, base, name)});
         if (Call(ctx, base, sub_82D28BD8, {ScratchString(ctx, base, name)}) & 0xFF) {
           uint32_t id = 0, used = 0;
-          for (uint32_t stack : {5050u, 3650u, 8344u, 2024u, 1828u, 1424u}) {
+          for (uint32_t stack : {15000u, 21000u, 9300u, 8032u, 6304u, 5000u, 4600u, 4592u}) {
             id = Call(ctx, base, sub_83527850, {ScratchString(ctx, base, name), stack});
             if (id) {
               used = stack;
