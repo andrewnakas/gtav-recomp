@@ -55,6 +55,9 @@ REX_EXTERN(sub_82D5C080);         // HAS_PED_GOT_WEAPON(ped, hash, 0)
 REX_EXTERN(sub_82D5BFD0);         // SET_CURRENT_PED_WEAPON(ped, hash, equip_now)
 REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
 
+REXCVAR_DEFINE_BOOL(gtav_trace_cutscene_audio, false, "GTAV",
+                    "Diagnostic: log the cutscene audio entity (0x83A320F8) state, its two stream slots and "
+                    "their positions whenever they change (cutscene_audio_fix.cpp)");
 REXCVAR_DEFINE_BOOL(gtav_debug_commands, false, "GTAV",
                     "Test hook: <exe>/logs/native_cmd is run on the script thread once per second "
                     "('kill' = SET_ENTITY_HEALTH(player, 0)) and deleted");
@@ -254,7 +257,7 @@ void StartVehicleContextPoll() {
   std::thread([] {
     bool last = false;
     for (;;) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+      std::this_thread::sleep_for(std::chrono::milliseconds(REXCVAR_GET(gtav_trace_cutscene_audio) ? 10 : 30));
       auto* memory = REX_KERNEL_MEMORY();
       if (!memory) continue;
       auto* base = memory->TranslateVirtual<uint8_t*>(0);
@@ -268,6 +271,39 @@ void StartVehicleContextPoll() {
           !gtav::native::SafeReadMemory(&b, base + 0x839F64DB, 1))
         continue;
 #endif
+      if (REXCVAR_GET(gtav_trace_cutscene_audio)) {
+        static std::string last_line;
+        static auto next = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() >= next) {
+          next = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+          auto rd = [&](uint32_t addr) -> uint32_t {
+            uint8_t v[4] = {};
+#ifdef _WIN32
+            std::memcpy(v, base + addr, 4);
+#else
+            if (!gtav::native::SafeReadMemory(v, base + addr, 4)) return 0xDEADDEAD;
+#endif
+            return uint32_t(v[0]) << 24 | uint32_t(v[1]) << 16 | uint32_t(v[2]) << 8 | v[3];
+          };
+          constexpr uint32_t kAudio = 0x83A320F8, kSlots = 0x83A320C0 + 10296;
+          const uint32_t state = rd(kAudio + 5068), flag = rd(kAudio + 5072) >> 24;
+          const int32_t sa = int32_t(rd(kAudio + 5044)), sb = int32_t(rd(kAudio + 5048));
+          std::string line = fmt::format("state {} flag {} slots {} {}", state, flag, sa, sb);
+          for (int i = 0; i < 2; ++i) {
+            const uint32_t st = rd(kSlots + 4 * i);
+            line += fmt::format(" | slot{} {:08X}", i, st);
+            if (st >= 0xC0000000 && st < 0xE0000000)
+            {
+              line += fmt::format(" pos {} end {} |", rd(st + 124), rd(st + 136));
+              for (uint32_t o = 0; o < 256; o += 4) line += fmt::format(" {:08X}", rd(st + o));
+            }
+          }
+          if (line != last_line) {
+            last_line = line;
+            REXLOG_INFO("[cuts] {}", line);
+          }
+        }
+      }
       const bool paused = a || b;
       if (paused != last) {
         last = paused;

@@ -129,10 +129,28 @@ index f8949ca..dfab846 100644
  
  }  // namespace rex::audio::sdl
 diff --git a/include/rex/audio/xma/context.h b/include/rex/audio/xma/context.h
-index 8426798..90eabaa 100644
+index 8426798..2c31737 100644
 --- a/include/rex/audio/xma/context.h
 +++ b/include/rex/audio/xma/context.h
-@@ -279,6 +279,10 @@ class XmaContext {
+@@ -206,6 +206,7 @@ class XmaContext {
+ 
+   int Setup(uint32_t id, memory::Memory* memory, uint32_t guest_ptr);
+   bool Work();
++  void LogState();  // xma_trace_buffers state dump
+ 
+   void Enable();
+   bool Block(bool poll);
+@@ -270,6 +271,9 @@ class XmaContext {
+   std::unique_ptr<rex::thread::Event> work_completion_event_;
+ 
+   uint32_t id_ = 0;
++
++  uint32_t traced_valid_ = 0;  // xma_trace_buffers
++  uint32_t stalled_passes_ = 0;
+   uint32_t guest_ptr_ = 0;
+   std::mutex lock_;
+   std::atomic<bool> is_allocated_ = false;
+@@ -279,6 +283,10 @@ class XmaContext {
    AVPacket* av_packet_ = nullptr;
    AVCodec* av_codec_ = nullptr;
    AVCodecContext* av_context_ = nullptr;
@@ -879,7 +897,7 @@ index 20a2cd8..2689059 100644
      }
    }
 diff --git a/src/audio/xma_context.cpp b/src/audio/xma_context.cpp
-index 11b83be..e2bb4c2 100644
+index 11b83be..61ce3fe 100644
 --- a/src/audio/xma_context.cpp
 +++ b/src/audio/xma_context.cpp
 @@ -9,12 +9,20 @@
@@ -903,7 +921,7 @@ index 11b83be..e2bb4c2 100644
  #include <rex/dbg.h>
  #include <rex/logging.h>
  #include <rex/memory/ring_buffer.h>
-@@ -36,10 +44,130 @@ extern "C" {
+@@ -36,10 +44,136 @@ extern "C" {
  // Credits for most of this code goes to:
  // https://github.com/koolkdev/libertyv/blob/master/libav_wrapper/xma2dec.c
  
@@ -922,6 +940,11 @@ index 11b83be..e2bb4c2 100644
 +                     "tables on the audio thread); 0 = reopen in place");
 +REXCVAR_DEFINE_BOOL(xma_trace, false, "Audio", "Log loud decoded XMA frames and starved-input resets");
 +REXCVAR_DEFINE_STRING(xma_dump_raw, "", "Audio", "Write every decoded XMA frame (with context and rate) to this file");
++REXCVAR_DEFINE_BOOL(xma_persistent_enable, false, "Audio",
++                    "XMA contexts stay enabled until the game disables them (as the hardware does) and decode "
++                    "whenever they have input and output space; off = one decode pass per kick");
++REXCVAR_DEFINE_BOOL(xma_trace_buffers, false, "Audio",
++                    "Log every XMA input buffer swap and every buffer the game (re)validates, per context");
 +REXCVAR_DEFINE_BOOL(xma_starved_reset, true, "Audio",
 +                    "Reset output write_offset to read_offset when a context runs out of input");
 +
@@ -930,6 +953,7 @@ index 11b83be..e2bb4c2 100644
  using stream::BitStream;
  
 +namespace {
++thread_local uint32_t g_trace_ctx = 0;  // xma_trace_buffers: the context Work() is on
 +// Peak |sample| of a converted frame (big-endian int16).
 +uint32_t FramePeak(const uint8_t* frame, size_t bytes) {
 +  uint32_t peak = 0;
@@ -1034,7 +1058,7 @@ index 11b83be..e2bb4c2 100644
  const uint32_t XmaContext::kBitsPerPacketHeader;
  const uint32_t XmaContext::kOutputMaxSizeBytes;
  
-@@ -50,6 +178,9 @@ XmaContext::~XmaContext() {
+@@ -50,6 +184,9 @@ XmaContext::~XmaContext() {
    if (av_context_) {
      avcodec_free_context(&av_context_);
    }
@@ -1044,17 +1068,53 @@ index 11b83be..e2bb4c2 100644
    if (av_frame_) {
      av_frame_free(&av_frame_);
    }
-@@ -117,6 +248,9 @@ bool XmaContext::Work() {
+@@ -98,11 +235,33 @@ bool XmaContext::Work() {
+   }
+ 
+   std::lock_guard<std::mutex> lock(lock_);
+-  set_is_enabled(false);
++  // Hardware: a context decodes while enabled, until XMADisableContext. GTA V's streamer refills an
++  // enabled context (next block of a cutscene track) without kicking it again; with one pass per
++  // kick that block was never decoded and the cutscene's dialogue stopped after ~7 s (issues #3/#4).
++  const bool persistent = REXCVAR_GET(xma_persistent_enable);
++  if (!persistent) set_is_enabled(false);
+ 
+   auto context_ptr = memory()->TranslateVirtual(guest_ptr());
+   XMA_CONTEXT_DATA data(context_ptr);
+   const XMA_CONTEXT_DATA initial_data = data;
++  if (persistent) {
++    // Only passes that can move something: valid output with space, and input (or a frame to finish).
++    if (!data.output_buffer_valid) return false;
++    if (!data.IsAnyInputBufferValid() && current_frame_remaining_subframes_ == 0 && !data.IsConsumeOnlyContext())
++      return false;
++  }
++  g_trace_ctx = id_;
++  if (REXCVAR_GET(xma_trace_buffers)) {
++    // What the game handed us since the last pass: newly valid buffers.
++    const uint32_t valid = uint32_t(data.input_buffer_0_valid) | uint32_t(data.input_buffer_1_valid) << 1;
++    if (valid != traced_valid_)
++      REXLOG_INFO("xma: ctx {} buffers valid {:02b} (was {:02b}) current {} read {} pkts {}/{} out valid {} w/r {}/{}",
++                  id_, valid, traced_valid_, uint32_t(data.current_buffer), uint32_t(data.input_buffer_read_offset),
++                  uint32_t(data.input_buffer_0_packet_count), uint32_t(data.input_buffer_1_packet_count),
++                  uint32_t(data.output_buffer_valid), uint32_t(data.output_buffer_write_offset),
++                  uint32_t(data.output_buffer_read_offset));
++    traced_valid_ = valid;
++  }
+ 
+   if (!data.output_buffer_valid) {
+     return true;
+@@ -117,6 +276,10 @@ bool XmaContext::Work() {
      }
      Consume(&output_rb, &data);
      data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
-+    if (output_rb.empty()) {
++    if (data.output_buffer_block_count != 0 && output_rb.empty() &&
++        data.output_buffer_write_offset != initial_data.output_buffer_write_offset) {
 +      data.output_buffer_valid = 0;
 +    }
      StoreContextMerged(data, initial_data, context_ptr);
      return true;
    }
-@@ -133,17 +267,42 @@ bool XmaContext::Work() {
+@@ -133,21 +296,77 @@ bool XmaContext::Work() {
    }
  
    while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count) {
@@ -1095,12 +1155,47 @@ index 11b83be..e2bb4c2 100644
 +  }
  
 -  if (output_rb.empty()) {
-+  // Output buffer full.
-+  if (remaining_subframe_blocks_in_output_buffer_ == 0 && output_rb.empty()) {
++  // Output buffer full: this pass filled it (write caught up with read). Not for a buffer the game
++  // has not sized yet (0 blocks reads as "no space, empty": the context was marked full before the
++  // game finished setting it up and never decoded again; GTA V cutscene streams went silent).
++  if (data.output_buffer_block_count != 0 && remaining_subframe_blocks_in_output_buffer_ == 0 &&
++      output_rb.empty() && data.output_buffer_write_offset != initial_data.output_buffer_write_offset) {
      data.output_buffer_valid = 0;
    }
  
-@@ -192,13 +351,16 @@ void XmaContext::ClearLocked(XMA_CONTEXT_DATA* data) {
++  if (REXCVAR_GET(xma_trace_buffers) && initial_data.IsAnyInputBufferValid()) {
++    // A pass with input that moved nothing: what the decoder is waiting on.
++    const bool moved = data.input_buffer_read_offset != initial_data.input_buffer_read_offset ||
++                       data.current_buffer != initial_data.current_buffer ||
++                       data.output_buffer_write_offset != initial_data.output_buffer_write_offset;
++    if (!moved) {
++      if (++stalled_passes_ == 50)
++        REXLOG_INFO("xma: ctx {} no progress for 50 passes: valid {}{} current {} read {} bits of {} packets, "
++                    "out valid {} w/r {}/{} space {} subframes left {} error {}",
++                    id_, uint32_t(data.input_buffer_0_valid), uint32_t(data.input_buffer_1_valid),
++                    uint32_t(data.current_buffer), uint32_t(data.input_buffer_read_offset),
++                    data.GetCurrentInputBufferPacketCount(), uint32_t(data.output_buffer_valid),
++                    uint32_t(data.output_buffer_write_offset), uint32_t(data.output_buffer_read_offset),
++                    remaining_subframe_blocks_in_output_buffer_, current_frame_remaining_subframes_,
++                    uint32_t(data.error_status));
++    } else {
++      stalled_passes_ = 0;
++    }
++  }
++
+   StoreContextMerged(data, initial_data, context_ptr);
++  if (persistent) {
++    return data.input_buffer_read_offset != initial_data.input_buffer_read_offset ||
++           data.current_buffer != initial_data.current_buffer ||
++           data.output_buffer_write_offset != initial_data.output_buffer_write_offset ||
++           data.input_buffer_0_valid != initial_data.input_buffer_0_valid ||
++           data.input_buffer_1_valid != initial_data.input_buffer_1_valid ||
++           data.output_buffer_valid != initial_data.output_buffer_valid;
++  }
+   return true;
+ }
+ 
+@@ -192,13 +411,16 @@ void XmaContext::ClearLocked(XMA_CONTEXT_DATA* data) {
  void XmaContext::ResetDecoderState() {
    // A freed or re-initialized context is a new logical stream, so the previous
    // wave's MDCT overlap-add tail must not survive into frame 0 of the next one.
@@ -1124,7 +1219,51 @@ index 11b83be..e2bb4c2 100644
    }
    raw_frame_.fill(0);
    decoded_frame_.fill(0);
-@@ -476,7 +638,30 @@ int XmaContext::PrepareDecoder(int sample_rate, bool is_two_channel) {
+@@ -226,7 +448,28 @@ void XmaContext::Release() {
+   std::memset(context_ptr, 0, sizeof(XMA_CONTEXT_DATA));
+ }
+ 
++void XmaContext::LogState() {
++  if (!is_allocated()) return;
++  std::lock_guard<std::mutex> lock(lock_);
++  XMA_CONTEXT_DATA d(memory()->TranslateVirtual(guest_ptr()));
++  if (!d.input_buffer_0_valid && !d.input_buffer_1_valid && !d.output_buffer_valid) return;
++  REXLOG_INFO("xma state: ctx {} enabled {} valid {}{} cur {} read {} pkts {}/{} out valid {} w/r {}/{} blocks {} "
++              "err {} subframes left {} loop {} stereo {} rate {}",
++              id_, is_enabled(), uint32_t(d.input_buffer_0_valid), uint32_t(d.input_buffer_1_valid),
++              uint32_t(d.current_buffer), uint32_t(d.input_buffer_read_offset),
++              uint32_t(d.input_buffer_0_packet_count), uint32_t(d.input_buffer_1_packet_count),
++              uint32_t(d.output_buffer_valid), uint32_t(d.output_buffer_write_offset),
++              uint32_t(d.output_buffer_read_offset), uint32_t(d.output_buffer_block_count),
++              uint32_t(d.error_status), current_frame_remaining_subframes_, uint32_t(d.loop_count),
++              uint32_t(d.is_stereo), uint32_t(d.sample_rate));
++}
++
+ void XmaContext::SwapInputBuffer(XMA_CONTEXT_DATA* data) {
++  if (REXCVAR_GET(xma_trace_buffers))
++    REXLOG_INFO("xma: ctx {} swap: buffer {} done (read offset {} bits, {} packets), other valid {}", g_trace_ctx,
++                uint32_t(data->current_buffer), uint32_t(data->input_buffer_read_offset),
++                data->GetCurrentInputBufferPacketCount(),
++                uint32_t(data->current_buffer ? data->input_buffer_0_valid : data->input_buffer_1_valid));
+   if (data->current_buffer == 0) {
+     data->input_buffer_0_valid = 0;
+   } else {
+@@ -417,7 +660,13 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
+   fresh.input_buffer_read_offset = data.input_buffer_read_offset;
+   fresh.error_status = data.error_status;
+   fresh.current_buffer = data.current_buffer;
+-  fresh.output_buffer_read_offset = data.output_buffer_read_offset;
++  // The output read offset is the game's: it advances it as it plays the decoded audio, also while
++  // a decode pass runs. Writing back the pass's snapshot undid that progress (a stream context sat
++  // at write 4 / read 0, the game waiting for audio it had already taken; GTA V cutscene dialogue
++  // stopped after the first block). Only a starved reset (which moves the write offset) touches it.
++  if (data.output_buffer_read_offset != initial_data.output_buffer_read_offset) {
++    fresh.output_buffer_read_offset = data.output_buffer_read_offset;
++  }
+ 
+   fresh.Store(context_ptr);
+ }
+@@ -476,7 +725,30 @@ int XmaContext::PrepareDecoder(int sample_rate, bool is_two_channel) {
        av_context_->channels != static_cast<int>(channels)) {
      REXAPU_NOISY_DEBUG("XmaContext {}: Codec reinit: rate {} -> {}, channels {} -> {}", id(),
                         av_context_->sample_rate, sample_rate, av_context_->channels, channels);
@@ -1156,7 +1295,7 @@ index 11b83be..e2bb4c2 100644
      av_context_ = avcodec_alloc_context3(av_codec_);
  
      av_context_->sample_rate = sample_rate;
-@@ -670,6 +855,35 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
+@@ -670,6 +942,35 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
    if (decoded) {
      ConvertFrame(reinterpret_cast<const uint8_t**>(&av_frame_->data), bool(data->is_stereo),
                   decoded_frame_.data());
@@ -1192,6 +1331,70 @@ index 11b83be..e2bb4c2 100644
  
      // Realign the decoder's output onto the bitstream's sample numbering: the
      // samples of the frame just decoded run from kDecoderStartPadding into this
+diff --git a/src/audio/xma_decoder.cpp b/src/audio/xma_decoder.cpp
+index a0a178d..efa07da 100644
+--- a/src/audio/xma_decoder.cpp
++++ b/src/audio/xma_decoder.cpp
+@@ -12,6 +12,12 @@
+ #include <rex/audio/xma/context.h>
+ #include <rex/audio/xma/decoder.h>
+ #include <rex/cvar.h>
++#include <chrono>
++#include <filesystem>
++
++REXCVAR_DECLARE(bool, xma_trace_buffers);
++REXCVAR_DECLARE(bool, xma_persistent_enable);
++#include <rex/cvar.h>
+ #include <rex/dbg.h>
+ #include <rex/logging.h>
+ #include <rex/perf/counter.h>
+@@ -151,6 +157,18 @@ void XmaDecoder::WorkerThreadMain() {
+       did_work = did_work || worked;
+     }
+ 
++    // xma_trace_buffers: <xma_state_file> appearing dumps every allocated context's registers.
++    if (REXCVAR_GET(xma_trace_buffers)) {
++      static auto next = std::chrono::steady_clock::now();
++      if (std::chrono::steady_clock::now() >= next) {
++        next = std::chrono::steady_clock::now() + std::chrono::seconds(1);
++        std::error_code ec;
++        if (std::filesystem::exists("/tmp/xma_state_request", ec)) {
++          std::filesystem::remove("/tmp/xma_state_request", ec);
++          for (uint32_t n = 0; n < kContextCount; n++) contexts_[n].LogState();
++        }
++      }
++    }
+     if (paused_) {
+       pause_fence_.Signal();
+       resume_fence_.Wait();
+@@ -159,8 +177,13 @@ void XmaDecoder::WorkerThreadMain() {
+     if (did_work) {
+       continue;
+     }
+-    // No work done this iteration, block until signaled.
+-    rex::thread::Wait(work_event_.get(), false);
++    // No work done this iteration, block until signaled. With persistent enables the game can
++    // refill an enabled context without a kick: look again every few ms.
++    if (REXCVAR_GET(xma_persistent_enable)) {
++      rex::thread::Wait(work_event_.get(), false, std::chrono::milliseconds(4));
++    } else {
++      rex::thread::Wait(work_event_.get(), false);
++    }
+   }
+ }
+ 
+@@ -299,9 +322,8 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
+       if (kicked_value & 1) {
+         uint32_t context_id = base_context_id + i;
+         auto& context = contexts_[context_id];
+-        if (context.Work()) {
+-          context.SignalWorkDone();
+-        }
++        context.Work();
++        context.SignalWorkDone();  // a kick always completes (Work may report no progress)
+       }
+     }
+     work_event_->Set();
 diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
 index b2d70f5..a101ca6 100644
 --- a/src/codegen/builders/system.cpp
