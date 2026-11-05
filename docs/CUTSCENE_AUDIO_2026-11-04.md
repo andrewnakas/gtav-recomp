@@ -63,3 +63,10 @@ index + skip + 1), and where it gives up. Compare the 79/81-packet buffers, whic
   submitted with read offset 32, the others with a seek offset). Still stops at 59 668 ms.
 - Next: what makes the game start reading a pre-loaded channel (look for the guest code reading
   output_buffer_read_offset / write_offset of these contexts around the block switch).
+
+## Pause map / portrait (#4) side note
+
+Also broken on the emulator renderer with `--readback_resolve=full --vulkan_readback_resolve=true
+--vulkan_readback_memexport=true`, so not a GPU-to-CPU readback problem: CPU side (game code
+or file loading). One lead: `ResolvePath(gamecache:\data\gta5_cache_x.dat) failed - device not
+found` at boot (the 360's HDD cache partition is not mounted).
