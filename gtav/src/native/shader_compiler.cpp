@@ -277,6 +277,37 @@ uint64_t CompileGeneration() { return g_generation.load(std::memory_order_acquir
 
 uint32_t PendingShaders() { return g_pending.load(std::memory_order_relaxed); }
 
+namespace {
+std::unordered_set<std::string> g_missing_at_draw;  // g_mutex
+}
+
+void NoteMissingAtDraw(const std::string& name) {
+  std::lock_guard lock(g_mutex);
+  if (!g_present.count(name)) g_missing_at_draw.insert(name);
+}
+
+ShaderStats GetShaderStats() {
+  ShaderStats s;
+  std::lock_guard lock(g_mutex);
+  s.created = uint32_t(g_seen.size());
+  for (const auto& name : g_seen)
+    if (g_present.count(name)) s.ready++;
+  s.compiled_this_run = g_ok.load();
+  s.pending = g_pending.load();
+  std::error_code ec;
+#ifdef _WIN32
+  s.can_compile = REXCVAR_GET(gtav_native_compile) && fs::exists(ToolsDir() / "dxc.exe", ec);
+#else
+  s.can_compile = REXCVAR_GET(gtav_native_compile) && fs::exists(ToolsDir() / "dxc", ec);
+#endif
+  s.failed.assign(g_failed_names.begin(), g_failed_names.end());
+  for (const auto& name : g_missing_at_draw)
+    if (!g_present.count(name)) s.missing_at_draw.push_back(name);
+  std::sort(s.failed.begin(), s.failed.end());
+  std::sort(s.missing_at_draw.begin(), s.missing_at_draw.end());
+  return s;
+}
+
 bool WaitForShader(const std::string& name, int timeout_ms) {
   std::unique_lock lock(g_mutex);
   if (g_present.count(name)) return true;

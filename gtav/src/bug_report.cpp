@@ -8,6 +8,7 @@
 #include "bug_report.h"
 
 #include "native/paths.h"
+#include "native/shader_compiler.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -237,6 +238,17 @@ std::string Create(const std::string& reason) {
   for (const char* name : {"gtav_settings.ini", "controls.ini"})
     if (ReadTail(native::ExeDir() / name, 1u << 20, &text)) zip.Add(name, text);
   zip.Add("system.txt", SystemInfo(reason, log_text));
+  {
+    const native::ShaderStats st = native::GetShaderStats();
+    std::ostringstream o;
+    o << "created " << st.created << ", ready " << st.ready << ", translated this run " << st.compiled_this_run
+      << ", pending " << st.pending << ", can translate " << (st.can_compile ? "yes" : "no") << "\n";
+    o << "\nfailed to translate (" << st.failed.size() << "):\n";
+    for (const auto& n : st.failed) o << n << "\n";
+    o << "\ndrawn without SPIR-V (" << st.missing_at_draw.size() << "):\n";
+    for (const auto& n : st.missing_at_draw) o << n << "\n";
+    zip.Add("shaders.txt", o.str());
+  }
   zip.Finish();
   REXLOG_INFO("[bug report] {} written ({})", zip_path.string(), reason);
   return zip_path.string();

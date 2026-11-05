@@ -1614,9 +1614,13 @@ class Renderer {
     uint32_t prims[16] = {};
     for (const auto& d : f.draws) {
       prims[d.primitive & 15]++;
-      missing_vs += !HaveShader(false, d.vs_hash);
+      if (!HaveShader(false, d.vs_hash)) {
+        missing_vs++;
+        if (d.vs_hash) NoteMissingAtDraw(fmt::format("vs_{:016X}", d.vs_hash));
+      }
       if (!HaveShader(true, d.ps_hash)) {
         missing_ps++;
+        if (d.ps_hash) NoteMissingAtDraw(fmt::format("ps_{:016X}", d.ps_hash));
         if (logged_missing_.insert(d.ps_hash).second && logged_missing_.size() <= 40)
           REXLOG_INFO("[native]   no SPIR-V for ps {:016X}", d.ps_hash);
       }

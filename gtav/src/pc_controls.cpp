@@ -13,6 +13,7 @@
 // (old-gen); handlers from the registration calls to sub_835253D0.
 
 #include "pc_controls.h"
+#include "bug_report.h"
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -58,6 +59,11 @@ REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
 REX_EXTERN(sub_82C9ADD8);         // GET_ENTITY_COORDS(entity, alive) -> vector3
 REX_EXTERN(sub_82D5F218);         // GET_CLOSEST_VEHICLE(x, y, z, radius, model, flags)
 REX_EXTERN(sub_82D0C3D8);         // SET_PED_INTO_VEHICLE(ped, vehicle, seat)
+REX_EXTERN(sub_82D28BB8);         // REQUEST_SCRIPT(name)
+REX_EXTERN(sub_82D28BD8);         // HAS_SCRIPT_LOADED(name)
+REX_EXTERN(sub_82D28BC8);         // SET_SCRIPT_AS_NO_LONGER_NEEDED(name)
+REX_EXTERN(sub_82D1FEC8);         // GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH(hash)
+REX_EXTERN(sub_83527850);         // START_NEW_SCRIPT(name, stack size) (registered via sub_83524A28)
 
 REXCVAR_DEFINE_BOOL(gtav_trace_cutscene_audio, false, "GTAV",
                     "Diagnostic: log the cutscene audio entity (0x83A320F8) state, its two stream slots and "
@@ -129,6 +135,19 @@ void CallVector(PPCContext& ctx, uint8_t* base, Handler fn, std::initializer_lis
   for (int k = 0; k < 3; ++k) out[k] = Load32(base, result + 4 * k);
   ctx = saved;
 }
+
+// A script name for the next Call: written into the same scratch area, past Call's own use.
+uint32_t ScratchString(PPCContext& ctx, uint8_t* base, const std::string& text) {
+  const uint32_t sp = (ctx.r1.u32 - 512) & ~15u;
+  const uint32_t at = sp + 400;
+  const size_t n = std::min<size_t>(text.size(), 100);
+  std::memcpy(base + at, text.data(), n);
+  base[at + n] = 0;
+  return at;
+}
+
+std::string g_pending_mission;  // debug command "mission <script>": started once loaded
+int g_mission_tries = 0;
 
 // PC weapon categories (keys 1-9) in wheel order; the mouse wheel steps through them in this order.
 // Hashes the game does not know just fail HAS_PED_GOT_WEAPON.
@@ -256,11 +275,20 @@ REX_HOOK_RAW(sub_82CE9CA8) {
         const auto path = gtav::native::ExeDir() / "logs" / "native_cmd";
         std::error_code ec;
         if (std::filesystem::exists(path, ec)) {
-          std::string cmd;
-          std::ifstream(path) >> cmd;
+          std::string cmd, arg;
+          { std::ifstream in(path); in >> cmd >> arg; }
           std::filesystem::remove(path, ec);
+          if (cmd == "mission") {
+            g_pending_mission = arg;
+            g_mission_tries = 0;
+          }
+          if (cmd == "report") gtav::bug_report::Create("debug command");
+          if (cmd == "threads")  // "threads family3": how many threads run that script
+            REXLOG_INFO("[controls] debug threads '{}': {}", arg,
+                        Call(ctx, base, sub_82D1FEC8, {Joaat(arg)}));
           REXLOG_INFO("[controls] debug command '{}'", cmd);
           if (cmd == "kill") Call(ctx, base, sub_82C9C078, {ped, 0});
+
           if (cmd == "car") {  // the nearest vehicle, driver's seat
             uint32_t xyz[3];
             CallVector(ctx, base, sub_82C9ADD8, {ped, 1}, xyz);
@@ -273,6 +301,30 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             REXLOG_INFO("[controls] debug car: vehicle {:08X}", vehicle);
             if (vehicle) Call(ctx, base, sub_82D0C3D8, {ped, vehicle, uint32_t(-1)});
           }
+        }
+      }
+    }
+    if (!g_pending_mission.empty()) {  // load, then start (GTA V mission stacks come in pools)
+      static auto next_try = now;
+      if (now >= next_try) {
+        next_try = now + std::chrono::milliseconds(500);
+        const std::string name = g_pending_mission;
+        Call(ctx, base, sub_82D28BB8, {ScratchString(ctx, base, name)});
+        if (Call(ctx, base, sub_82D28BD8, {ScratchString(ctx, base, name)}) & 0xFF) {
+          uint32_t id = 0, used = 0;
+          for (uint32_t stack : {5050u, 3650u, 8344u, 2024u, 1828u, 1424u}) {
+            id = Call(ctx, base, sub_83527850, {ScratchString(ctx, base, name), stack});
+            if (id) {
+              used = stack;
+              break;
+            }
+          }
+          Call(ctx, base, sub_82D28BC8, {ScratchString(ctx, base, name)});
+          REXLOG_INFO("[controls] debug mission '{}': thread {} (stack {})", name, id, used);
+          g_pending_mission.clear();
+        } else if (++g_mission_tries > 60) {
+          REXLOG_INFO("[controls] debug mission '{}': script never loaded", name);
+          g_pending_mission.clear();
         }
       }
     }

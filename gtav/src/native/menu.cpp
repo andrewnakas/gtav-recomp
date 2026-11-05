@@ -6,6 +6,7 @@
 #include "touch_controls.h"
 #include "controls.h"
 #include "../bug_report.h"
+#include "shader_compiler.h"
 
 #include "paths.h"
 
@@ -311,6 +312,34 @@ void Build(uint32_t fps, double frame_ms) {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Text and menus (speech stays English). Applied at the next start.");
     if (now != started) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Restart the game to apply the new language.");
+  }
+  ImGui::Separator();
+  {
+    // What the renderer has: shaders the game made, which have SPIR-V, which failed or are missing.
+    static ShaderStats stats;
+    static int refresh = 0;
+    if (refresh-- <= 0) stats = GetShaderStats(), refresh = 30;
+    const size_t bad = stats.failed.size() + stats.missing_at_draw.size();
+    if (ImGui::CollapsingHeader(bad ? "Shaders (some missing)###shaders" : "Shaders###shaders")) {
+      ImGui::Text("%u of %u game shaders ready", stats.ready, stats.created);
+      if (stats.pending) ImGui::Text("%u being prepared now", stats.pending);
+      ImGui::Text("%u translated on this computer this run", stats.compiled_this_run);
+      if (!stats.can_compile)
+        ImGui::TextWrapped("This device cannot translate shaders: missing ones are saved for the PC "
+                           "(rebuild the phone package there).");
+      auto list = [&](const char* title, const std::vector<std::string>& names, const char* help) {
+        if (names.empty()) return;
+        if (ImGui::TreeNode(title, "%s: %zu", title, names.size())) {
+          ImGui::TextDisabled("%s", help);
+          for (const auto& n : names) ImGui::BulletText("%s", n.c_str());
+          ImGui::TreePop();
+        }
+      };
+      list("Failed to translate", stats.failed, "Draws using these are skipped. Please send a bug report.");
+      list("Drawn without a shader", stats.missing_at_draw,
+           "The game drew with these before they were ready (or they failed): objects can be missing.");
+      if (!bad) ImGui::TextDisabled("Nothing missing.");
+    }
   }
   ImGui::Separator();
   ImGui::TextUnformatted("Problems?");
