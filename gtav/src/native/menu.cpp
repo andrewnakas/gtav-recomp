@@ -51,6 +51,7 @@ float g_scale = 1.0f;
 // Every setting the menu shows, by cvar name. Saved to gtav_settings.ini as name=value.
 constexpr const char* kSettings[] = {
     "gtav_fps_limit",
+    "gtav_vehicle_30fps",
     "gtav_native_vsync",
     "gtav_native_fps",
     "gtav_native_tile_penumbra_all",
@@ -224,6 +225,9 @@ void Build(uint32_t fps, double frame_ms) {
     if (std::abs(now - started) > 0.01) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Restart the game to apply the new resolution.");
   }
 #endif
+  check("30 fps in vehicles (Xbox handling)", "gtav_vehicle_30fps",
+        "Driving and flying are tuned for the Xbox's 30 fps: above it steering and handling get too fast.\n"
+        "On: vehicles run at 30 fps, on foot the limit above applies.");
   check("VSync", "gtav_native_vsync", "Wait for the display refresh: no tearing, fps capped at the refresh rate.");
   check("FPS counter", "gtav_native_fps", "Frames per second in the top-left corner.");
   ImGui::Separator();

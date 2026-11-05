@@ -252,10 +252,10 @@ index 1cb3faa..a68b9cc 100644
  
  /// Create a default InputSystem with SDL + NOP drivers.
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
-index c8751b7..8642eba 100644
+index c8751b7..59c657b 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
 +++ b/include/rex/input/mnk/mnk_input_driver.h
-@@ -15,15 +15,62 @@
+@@ -15,15 +15,64 @@
  #include <rex/ui/window_listener.h>
  
  #include <atomic>
@@ -281,6 +281,8 @@ index c8751b7..8642eba 100644
 +};
 +void SetInputContext(InputContext context);
 +InputContext GetInputContext();
++// The same without the pause menu: what the player is doing in the world.
++InputContext GetGameplayContext();
 +// Pause menu / frontend open (scripts stop while paused, so the title reports it separately).
 +void SetFrontendActive(bool active);
 +
@@ -318,7 +320,7 @@ index c8751b7..8642eba 100644
  
  class MnkInputDriver final : public InputDriver,
                               public rex::ui::WindowInputListener,
-@@ -50,6 +97,7 @@ class MnkInputDriver final : public InputDriver,
+@@ -50,6 +99,7 @@ class MnkInputDriver final : public InputDriver,
    void OnMouseDown(rex::ui::MouseEvent& e) override;
    void OnMouseUp(rex::ui::MouseEvent& e) override;
    void OnMouseMove(rex::ui::MouseEvent& e) override;
@@ -326,7 +328,7 @@ index c8751b7..8642eba 100644
  
    // WindowListener
    void OnClosing(rex::ui::UIEvent& e) override;
-@@ -60,6 +108,16 @@ class MnkInputDriver final : public InputDriver,
+@@ -60,6 +110,16 @@ class MnkInputDriver final : public InputDriver,
    bool IsEnabled() const;
    void SetKeyState(uint16_t vk, bool down);
    void EnqueueKeystroke(uint16_t vk_pad, bool down);
@@ -343,7 +345,7 @@ index c8751b7..8642eba 100644
  
    // Called from the guest thread. The rest of the capture path stays on the UI
    // thread, since every Window call in it reaches SDL.
-@@ -75,6 +133,15 @@ class MnkInputDriver final : public InputDriver,
+@@ -75,6 +135,15 @@ class MnkInputDriver final : public InputDriver,
  
    std::mutex state_mutex_;
    bool key_down_[256] = {};
@@ -3291,7 +3293,7 @@ index 813bb1c..36b32ae 100644
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..9748af2 100644
+index 3f9422d..157dce4 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
 @@ -22,6 +22,9 @@
@@ -3399,7 +3401,7 @@ index 3f9422d..9748af2 100644
  
  }  // namespace
  
-@@ -143,16 +161,147 @@ void SetMouseLookActive(bool active) {
+@@ -143,16 +161,149 @@ void SetMouseLookActive(bool active) {
    mouse_look_active.store(active, std::memory_order_relaxed);
  }
  
@@ -3418,6 +3420,8 @@ index 3f9422d..9748af2 100644
 +  if (frontend_active.load(std::memory_order_relaxed)) return InputContext::kFrontend;
 +  return InputContext(input_context.load(std::memory_order_relaxed));
 +}
++
++InputContext GetGameplayContext() { return InputContext(input_context.load(std::memory_order_relaxed)); }
 +
 +void SetFrontendActive(bool active) { frontend_active.store(active, std::memory_order_relaxed); }
 +
@@ -3548,7 +3552,7 @@ index 3f9422d..9748af2 100644
    // Detach handled by OnClosing; if window outlives the driver, clean up here.
    DetachFromWindow();
  }
-@@ -275,50 +424,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -275,50 +426,38 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    std::lock_guard lock(state_mutex_);
  
    uint16_t buttons = 0;
@@ -3629,7 +3633,7 @@ index 3f9422d..9748af2 100644
  
    int32_t rx = 0;
    int32_t ry = 0;
-@@ -331,11 +468,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -331,11 +470,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
      ry -= INT16_MAX;
  
@@ -3658,7 +3662,7 @@ index 3f9422d..9748af2 100644
    }
    // Drained unconditionally: deltas keep accumulating in OnMouseMove while the
    // mouse is off, and toggling it on would otherwise dump the whole backlog
-@@ -558,6 +711,130 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+@@ -558,6 +713,130 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    }
  }
  

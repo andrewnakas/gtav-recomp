@@ -28,6 +28,7 @@
 #endif
 
 #include <array>
+#include <bit>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -54,6 +55,9 @@ REX_EXTERN(sub_82D57A40);         // GET_SELECTED_PED_WEAPON(ped)
 REX_EXTERN(sub_82D5C080);         // HAS_PED_GOT_WEAPON(ped, hash, 0)
 REX_EXTERN(sub_82D5BFD0);         // SET_CURRENT_PED_WEAPON(ped, hash, equip_now)
 REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
+REX_EXTERN(sub_82C9ADD8);         // GET_ENTITY_COORDS(entity, alive) -> vector3
+REX_EXTERN(sub_82D5F218);         // GET_CLOSEST_VEHICLE(x, y, z, radius, model, flags)
+REX_EXTERN(sub_82D0C3D8);         // SET_PED_INTO_VEHICLE(ped, vehicle, seat)
 
 REXCVAR_DEFINE_BOOL(gtav_trace_cutscene_audio, false, "GTAV",
                     "Diagnostic: log the cutscene audio entity (0x83A320F8) state, its two stream slots and "
@@ -107,6 +111,23 @@ uint32_t Call(PPCContext& ctx, uint8_t* base, Handler fn, std::initializer_list<
   const uint32_t r = Load32(base, result);
   ctx = saved;
   return r;
+}
+
+// As Call, for commands that return a vector: its three floats (raw bits) into out.
+void CallVector(PPCContext& ctx, uint8_t* base, Handler fn, std::initializer_list<uint32_t> args, uint32_t out[3]) {
+  const PPCContext saved = ctx;
+  const uint32_t sp = (ctx.r1.u32 - 512) & ~15u;
+  const uint32_t call = sp + 256, argv = sp + 288, result = sp + 352;
+  Store32(base, call + 0, result);
+  Store32(base, call + 4, uint32_t(args.size()));
+  Store32(base, call + 8, argv);
+  uint32_t i = 0;
+  for (uint32_t a : args) Store32(base, argv + 4 * i++, a);
+  ctx.r1.u32 = sp;
+  ctx.r3.u64 = call;
+  fn(ctx, base);
+  for (int k = 0; k < 3; ++k) out[k] = Load32(base, result + 4 * k);
+  ctx = saved;
 }
 
 // PC weapon categories (keys 1-9) in wheel order; the mouse wheel steps through them in this order.
@@ -240,6 +261,18 @@ REX_HOOK_RAW(sub_82CE9CA8) {
           std::filesystem::remove(path, ec);
           REXLOG_INFO("[controls] debug command '{}'", cmd);
           if (cmd == "kill") Call(ctx, base, sub_82C9C078, {ped, 0});
+          if (cmd == "car") {  // the nearest vehicle, driver's seat
+            uint32_t xyz[3];
+            CallVector(ctx, base, sub_82C9ADD8, {ped, 1}, xyz);
+            const uint32_t radius = std::bit_cast<uint32_t>(30.0f);
+            uint32_t vehicle = 0;
+            for (uint32_t flags : {70u, 71u, 127u, 0u}) {
+              vehicle = Call(ctx, base, sub_82D5F218, {xyz[0], xyz[1], xyz[2], radius, 0, flags});
+              if (vehicle) break;
+            }
+            REXLOG_INFO("[controls] debug car: vehicle {:08X}", vehicle);
+            if (vehicle) Call(ctx, base, sub_82D0C3D8, {ped, vehicle, uint32_t(-1)});
+          }
         }
       }
     }

@@ -9,6 +9,7 @@
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
+#include <rex/input/mnk/mnk_input_driver.h>
 
 #include <chrono>
 #include <cstdint>
@@ -21,6 +22,9 @@
 
 REXCVAR_DEFINE_INT32(gtav_fps_limit, 30, "GTAV",
                      "Frame-rate limit: 30 = the game's own limiter, 0 = uncapped, other = that rate");
+REXCVAR_DEFINE_BOOL(gtav_vehicle_30fps, true, "GTAV",
+                    "In vehicles, run at the Xbox's 30 fps (the game's own limiter): the driving and flying "
+                    "handling is tuned for it and too fast/twitchy above (issue #12). On foot the limit applies");
 REXCVAR_DEFINE_BOOL(gtav_audio_unsync, true, "GTAV",
                     "Above 30 fps: stop the audio update waiting for the next 16 ms audio frame "
                     "(otherwise the game cannot exceed 62.5 fps)");
@@ -74,7 +78,18 @@ REX_EXTERN(__imp__sub_827B5878);
 REX_HOOK_RAW(sub_827B5878) {
   ApplyPowerThrottling();
   int32_t limit = REXCVAR_GET(gtav_fps_limit);
+  if (REXCVAR_GET(gtav_vehicle_30fps)) {
+    // The player's context comes from the game (pc_controls.cpp, also without keyboard/mouse).
+    using C = rex::input::mnk::InputContext;
+    switch (rex::input::mnk::GetGameplayContext()) {
+      case C::kCar: case C::kBike: case C::kBicycle: case C::kBoat: case C::kAircraft: case C::kSub:
+        limit = 30;
+        break;
+      default: break;
+    }
+  }
   if (limit == 30) {
+    Store32(base, kFrameIntervalVblanks, 2);  // the 360's value (also after a switch from another limit)
     __imp__sub_827B5878(ctx, base);
     return;
   }
