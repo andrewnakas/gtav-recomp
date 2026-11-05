@@ -69,4 +69,4 @@ index + skip + 1), and where it gives up. Compare the 79/81-packet buffers, whic
 Also broken on the emulator renderer with `--readback_resolve=full --vulkan_readback_resolve=true
 --vulkan_readback_memexport=true`, so not a GPU-to-CPU readback problem: CPU side (game code
 or file loading). One lead: `ResolvePath(gamecache:\data\gta5_cache_x.dat) failed - device not
-found` at boot (the 360's HDD cache partition is not mounted).
+found` at boot (the 360's HDD cache partition is not mounted). Tried `--mount_gamecache=true` (host folder at gamecache:): mounted, the game wrote nothing there and the map is unchanged.
