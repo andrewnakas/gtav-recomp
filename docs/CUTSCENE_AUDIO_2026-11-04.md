@@ -70,3 +70,12 @@ Also broken on the emulator renderer with `--readback_resolve=full --vulkan_read
 --vulkan_readback_memexport=true`, so not a GPU-to-CPU readback problem: CPU side (game code
 or file loading). One lead: `ResolvePath(gamecache:\data\gta5_cache_x.dat) failed - device not
 found` at boot (the 360's HDD cache partition is not mounted). Tried `--mount_gamecache=true` (host folder at gamecache:): mounted, the game wrote nothing there and the map is unchanged.
+
+## Round 3
+
+- StoreContextMerged now also keeps a read offset / current buffer the game wrote during a decode
+  pass (and drops the decoder's frame state). Traced: no such mid-pass seek happens in this
+  cutscene (`game seeked` never logged), so it is not the cause; kept as a correctness fix.
+- Still open: why the game never starts reading the pre-loaded 86-packet channel. The block
+  switch is in the game's stream player (around sub_823CB180 / the stream slot objects at
+  0x83A320C0 + 10296); reverse-engineering that is the next step.
