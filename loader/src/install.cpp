@@ -1913,6 +1913,8 @@ bool LaunchGame(const fs::path& root, std::wstring* error, const std::vector<std
                arg(L"gtav_native_spirv_dir", data / L"spirv"), L"--gpu_plugin=xenos",
                L"--headless=true", L"--log_level=info", L"--log_max_file_size_mb=256",
                L"--log_max_files=2",
+               // Keyboard and mouse everywhere (GTA V PC layout, remappable in the settings menu).
+               L"--mnk_mode=true", L"--mnk_mouse=true",
 #ifdef _WIN32
                L"--input_backend=xinput",
 #endif
@@ -1920,7 +1922,7 @@ bool LaunchGame(const fs::path& root, std::wstring* error, const std::vector<std
                // The runtime's own window would open in a fullscreen Space of its own; the native
                // renderer hides it and opens the game window on the desktop, leaving the player
                // looking at an empty black Space.
-               L"--fullscreen=false", L"--mnk_mode=true",
+               L"--fullscreen=false",
 #endif
                L"--gtav_native=on", L"--gtav_fps_limit=0", L"--gpu_skip_rendering=true",
                L"--gpu_skip_rendering_lag_ms=4", L"--vsync=false", L"--gtav_native_vsync=false"};

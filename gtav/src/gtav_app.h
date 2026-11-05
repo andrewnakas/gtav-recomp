@@ -10,6 +10,7 @@
 #include "native/menu.h"
 #include "native/controls.h"
 #include "pc_controls.h"
+#include "bug_report.h"
 #include "native/touch_controls.h"
 #include <rex/system/kernel_state.h>
 #include <rex/ui/presenter.h>
@@ -73,6 +74,12 @@ class GtavApp : public rex::ReXApp {
   // GTAV_SHOT_DIR=<dir> [GTAV_SHOT_SECS=<n>, default 30]: every n seconds save the guest
   // output as <dir>/shot_<seconds>.ppm. For checking unattended boots (no screen capture needed).
   void OnPostSetup() override {
+    // The previous run crashed: its logs are zipped for a GitHub issue right away, and the
+    // settings menu shows where (bug_report.cpp).
+    if (std::string report = gtav::bug_report::CreateIfLastRunCrashed(); !report.empty())
+      gtav::native::menu::SetNotice("The game crashed last time. A bug report was saved:\n" + report +
+                                        "\nAttach it to a GitHub issue (F1 > Create bug report makes a new one).",
+                                    30.0);
 #if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
     gtav::StartVehicleContextPoll();  // keyboard/mouse: on-foot or vehicle layout (PC controls)
 #endif

@@ -5,6 +5,14 @@
 cmake_minimum_required(VERSION 3.25)
 project(gtav LANGUAGES CXX)
 
+# Build id for bug reports: the source commit (git describe), or "unknown" outside a git checkout.
+execute_process(COMMAND git describe --always --dirty --tags
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+                OUTPUT_VARIABLE GTAV_BUILD_ID OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT GTAV_BUILD_ID)
+    set(GTAV_BUILD_ID "unknown")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -56,6 +64,7 @@ set(GTAV_SOURCES
     src/crash_handler.cpp
     src/cutscene_audio_fix.cpp
     src/pc_controls.cpp
+    src/bug_report.cpp
     src/frame_limit.cpp
     src/wait_profile.cpp
     src/gpu_fence_wait.cpp
@@ -423,3 +432,6 @@ if(GTAV_IOS)
     set_source_files_properties(src/ios_setup.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(gtav PRIVATE "-framework UIKit" "-framework UniformTypeIdentifiers")
 endif()
+
+# Bug reports name the build (bug_report.cpp).
+set_source_files_properties(src/bug_report.cpp PROPERTIES COMPILE_DEFINITIONS "GTAV_BUILD_ID=\"${GTAV_BUILD_ID}\"")

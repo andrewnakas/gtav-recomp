@@ -93,6 +93,13 @@ from them.
 - **First launch**: the game's shaders are translated on your computer while it loads ("Preparing
   shaders" in the corner); later launches reuse them.
 
+## Reporting bugs
+
+Open the settings menu and press **Create bug report**: it saves one zip (`data/logs/gtav-bug-report-<date>.zip`)
+with the game log, crash info, your settings and system info, and opens its folder. If the game crashed, the next
+start makes one automatically and shows where it is. [Open an issue](https://github.com/andrewnakas/gtav-recomp/issues/new/choose)
+and drag the zip in. For a mission bug, a save from just before it helps too.
+
 ## Windows
 
 1. Download `gtav-recomp-windows-x64.zip`, unzip it somewhere with enough space, and run

@@ -5,6 +5,7 @@
 #endif
 #include "touch_controls.h"
 #include "controls.h"
+#include "../bug_report.h"
 
 #include "paths.h"
 
@@ -13,6 +14,7 @@
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <atomic>
 #include <cstdio>
@@ -43,6 +45,11 @@ std::mutex g_input_mutex;
 std::vector<Input> g_input;
 std::atomic<bool> g_open{false};
 bool g_controls_open = false;
+std::mutex g_notice_mutex;
+std::string g_notice;
+std::chrono::steady_clock::time_point g_notice_until{};
+double g_notice_seconds = 0;  // counted from the first frame that shows it (boots take a while)
+std::string g_last_report;
 
 ImGuiContext* g_context = nullptr;
 bool g_font_uploaded = false;
@@ -306,6 +313,16 @@ void Build(uint32_t fps, double frame_ms) {
     if (now != started) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Restart the game to apply the new language.");
   }
   ImGui::Separator();
+  ImGui::TextUnformatted("Problems?");
+  if (ImGui::Button("Create bug report")) {
+    g_last_report = gtav::bug_report::Create("settings menu");
+    if (!g_last_report.empty()) gtav::bug_report::ShowInFolder(g_last_report);
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Zips the game log, crash info, your settings and system info into one file.\n"
+                      "Attach it to an issue on github.com/andrewnakas/gtav-recomp/issues.");
+  if (!g_last_report.empty()) ImGui::TextWrapped("Saved: %s", g_last_report.c_str());
+  ImGui::Separator();
   check("Touch controls", "gtav_touch_controls", "The on-screen gamepad (hidden while a controller is connected).");
   ImGui::TextDisabled("Controller: RB + Back opens/closes this menu; D-pad + A to change, B to close.");
   if (changed) SaveSettings();
@@ -361,9 +378,27 @@ void LoadSettings() {
   }
 }
 
+void SetNotice(const std::string& text, double seconds) {
+  std::lock_guard lock(g_notice_mutex);
+  g_notice = text;
+  g_notice_seconds = seconds;
+  g_notice_until = {};
+}
+
 ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms, uint32_t pending_shaders) {
   const bool touch_overlay = touch::Visible();
-  if (!g_open && !touch_overlay && !pending_shaders) return nullptr;
+  std::string notice;
+  {
+    std::lock_guard lock(g_notice_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (g_notice_seconds > 0) {
+      g_notice_until = now + std::chrono::milliseconds(int64_t(g_notice_seconds * 1000));
+      g_notice_seconds = 0;
+      REXLOG_INFO("[native] on-screen notice shown: {}", g_notice);
+    }
+    if (now < g_notice_until) notice = g_notice;
+  }
+  if (!g_open && !touch_overlay && !pending_shaders && notice.empty()) return nullptr;
   EnsureContext(h);
   ImGuiContext* previous = ImGui::GetCurrentContext();
   ImGui::SetCurrentContext(g_context);
@@ -390,6 +425,15 @@ ImDrawData* Frame(uint32_t w, uint32_t h, uint32_t fps, double frame_ms, uint32_
   ImGui::NewFrame();
   if (g_open) Build(fps, frame_ms);
   if (touch_overlay) touch::Draw(ImGui::GetForegroundDrawList(), float(w), float(h));
+  if (!notice.empty()) {
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const float pad = 10.0f * g_scale;
+    const ImVec2 size = ImGui::CalcTextSize(notice.c_str());
+    const ImVec2 at((float(w) - size.x) * 0.5f, float(h) - size.y - 6 * pad);
+    dl->AddRectFilled(ImVec2(at.x - pad, at.y - pad), ImVec2(at.x + size.x + pad, at.y + size.y + pad),
+                      IM_COL32(0, 0, 0, 200), 6.0f * g_scale);
+    dl->AddText(at, IM_COL32(255, 220, 120, 255), notice.c_str());
+  }
   if (pending_shaders) {
     // First launch: the game's shaders are translated on this machine while it boots; the picture
     // can stay dark until they are done. Later launches reuse them.

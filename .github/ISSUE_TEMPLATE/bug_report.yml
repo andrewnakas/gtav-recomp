@@ -1,0 +1,45 @@
+name: Bug report
+description: Something is broken (crash, graphics, sound, controls, a mission...)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The fastest way to get a bug fixed is the **bug report file**:
+        open the settings menu (**F1** with keyboard and mouse, **Esc** with a controller only, **RB + Back** on a controller)
+        and press **Create bug report**. It saves one `gtav-bug-report-<date>.zip` (game log, crash info, your settings,
+        system info) and opens its folder. After a crash, the next start makes one automatically and tells you where.
+        Drag that zip into the box below.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Windows, Linux, Steam Deck, macOS, iPhone, Android]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Release version
+      placeholder: e.g. v0.3.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Where in the game (mission name, place), what you did right before it, screenshots.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Bug report zip
+      description: Drag the gtav-bug-report-*.zip here (settings menu > Create bug report; it is in data/logs).
+    validations:
+      required: false
+  - type: textarea
+    id: save
+    attributes:
+      label: Save file (optional)
+      description: For a bug in a mission, a save from just before it helps a lot (your data/user folder, zipped).

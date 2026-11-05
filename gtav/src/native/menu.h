@@ -18,6 +18,8 @@ void OnMouseButton(int button, bool down);
 void OnMouseWheel(float dy);
 enum class Key { kUp, kDown, kLeft, kRight, kEnter, kSpace, kTab };
 void OnKey(Key key, bool down);
+// A message shown on screen for `seconds` (any thread).
+void SetNotice(const std::string& text, double seconds);
 // F11 / Alt+Enter: flips gtav_fullscreen and saves it (the renderer applies it next frame).
 void ToggleFullscreen();
 
