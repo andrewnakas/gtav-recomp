@@ -44,6 +44,9 @@
 #include "native/paths.h"
 
 REX_EXTERN(__imp__sub_82CE9CA8);  // PLAYER_PED_ID
+REX_EXTERN(sub_82C728A8);         // LOAD_STREAM(name, soundset)
+REX_EXTERN(sub_82C67E80);         // PLAY_STREAM_FRONTEND()
+REX_EXTERN(sub_82C67E90);         // STOP_STREAM()
 REX_EXTERN(sub_82D0BF30);         // IS_PED_IN_ANY_VEHICLE(ped, include_entering)
 REX_EXTERN(sub_82D0C8E0);         // IS_PED_IN_ANY_PLANE(ped)
 REX_EXTERN(sub_82D0C8A0);         // IS_PED_IN_ANY_HELI(ped)
@@ -154,6 +157,7 @@ uint32_t ScratchString(PPCContext& ctx, uint8_t* base, const std::string& text) 
   return at;
 }
 
+std::string g_pending_stream;  // debug command "stream <name>": LOAD_STREAM until it loads, play 3 s
 std::string g_pending_model;  // debug command "model <name>": becomes the player model once loaded
 std::string g_pending_mission;  // debug command "mission <script>": started once loaded
 int g_mission_tries = 0;
@@ -296,6 +300,7 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             g_pending_mission = arg;
             g_mission_tries = 0;
           }
+          if (cmd == "stream") g_pending_stream = arg;  // e.g. FAMILY3_DECK_PULL_01_MASTER
           if (cmd == "model") g_pending_model = arg;  // e.g. player_zero (Michael), player_one, player_two
           if (cmd == "report") gtav::bug_report::Create("debug command");
           if (cmd == "thread") {  // "thread <id>": the scrThread object's first 64 words
@@ -421,6 +426,33 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             }
             REXLOG_INFO("[controls] debug car: vehicle {:08X}", vehicle);
             if (vehicle) Call(ctx, base, sub_82D0C3D8, {ped, vehicle, uint32_t(-1)});
+          }
+        }
+      }
+    }
+    if (!g_pending_stream.empty()) {
+      static auto next_try = now;
+      static int tries = 0;
+      static std::chrono::steady_clock::time_point stop_at{};
+      if (stop_at != std::chrono::steady_clock::time_point{} && now >= stop_at) {
+        Call(ctx, base, sub_82C67E90, {});
+        REXLOG_INFO("[controls] debug stream {}: stopped", g_pending_stream);
+        stop_at = {};
+        tries = 0;
+        g_pending_stream.clear();
+      } else if (stop_at == std::chrono::steady_clock::time_point{} && now >= next_try) {
+        next_try = now + std::chrono::milliseconds(500);
+        const bool loaded = Call(ctx, base, sub_82C728A8, {ScratchString(ctx, base, g_pending_stream), 0}) & 0xFF;
+        ++tries;
+        if (loaded) {
+          Call(ctx, base, sub_82C67E80, {});
+          REXLOG_INFO("[controls] debug stream {}: loaded after {} tries, playing", g_pending_stream, tries);
+          stop_at = now + std::chrono::seconds(3);
+        } else if (tries % 10 == 0) {
+          REXLOG_INFO("[controls] debug stream {}: not loaded after {} tries", g_pending_stream, tries);
+          if (tries >= 60) {
+            g_pending_stream.clear();
+            tries = 0;
           }
         }
       }
