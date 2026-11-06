@@ -158,6 +158,7 @@ uint32_t ScratchString(PPCContext& ctx, uint8_t* base, const std::string& text) 
 }
 
 std::string g_pending_stream;  // debug command "stream <name>": LOAD_STREAM until it loads, play 3 s
+std::string g_chain_next;  // "streamchain A B": play A to its end (no STOP_STREAM), then LOAD_STREAM B as family3 does
 std::string g_pending_model;  // debug command "model <name>": becomes the player model once loaded
 std::string g_pending_mission;  // debug command "mission <script>": started once loaded
 int g_mission_tries = 0;
@@ -301,6 +302,11 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             g_mission_tries = 0;
           }
           if (cmd == "stream") g_pending_stream = arg;  // e.g. FAMILY3_DECK_PULL_01_MASTER
+          if (cmd == "streamchain") {
+            g_pending_stream = arg;
+            std::istringstream r(rest);
+            r >> g_chain_next;
+          }
           if (cmd == "model") g_pending_model = arg;  // e.g. player_zero (Michael), player_one, player_two
           if (cmd == "report") gtav::bug_report::Create("debug command");
           if (cmd == "thread") {  // "thread <id>": the scrThread object's first 64 words
@@ -447,10 +453,17 @@ REX_HOOK_RAW(sub_82CE9CA8) {
         if (loaded) {
           Call(ctx, base, sub_82C67E80, {});
           REXLOG_INFO("[controls] debug stream {}: loaded after {} tries, playing", g_pending_stream, tries);
-          stop_at = now + std::chrono::seconds(3);
+          if (!g_chain_next.empty()) {  // let it play out, then load the next like the mission does
+            g_pending_stream = g_chain_next;
+            g_chain_next.clear();
+            tries = 0;
+            next_try = now + std::chrono::seconds(1);
+          } else {
+            stop_at = now + std::chrono::seconds(3);
+          }
         } else if (tries % 10 == 0) {
           REXLOG_INFO("[controls] debug stream {}: not loaded after {} tries", g_pending_stream, tries);
-          if (tries >= 60) {
+          if (tries >= 240) {
             g_pending_stream.clear();
             tries = 0;
           }
