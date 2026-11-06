@@ -29,7 +29,6 @@ FILES = [
     (BUILD / "gtav_fast.exe", "gtav_fast.exe"),
     (BUILD / "rexruntimerd.dll", "rexruntimerd.dll"),
     (BUILD / "rexgpu-xenosrd.dll", "rexgpu-xenosrd.dll"),
-    (BUILD / "TracyClientrd.dll", "TracyClientrd.dll"),
     (SDK_BIN / "rexgluerd.exe", "rexgluerd.exe"),
     # Shader translation on the player's machine (shader_compiler.cpp). dxil.dll is not needed
     # for SPIR-V and stays out.
@@ -141,6 +140,12 @@ def main():
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
+    # The Tracy profiler stays out of player builds (issue #18: antivirus flags TracyClientrd.dll,
+    # and its client opens a listening socket). Build the SDK with -DREXGLUE_ENABLE_TRACY=OFF, as
+    # the macOS, Linux and Android releases do.
+    for dll in (BUILD / "rexruntimerd.dll", BUILD / "rexgpu-xenosrd.dll", BUILD / "gtav_fast.exe"):
+        if dll.is_file() and b"TracyClient" in dll.read_bytes():
+            sys.exit(f"{dll.name} imports TracyClient: rebuild the SDK with -DREXGLUE_ENABLE_TRACY=OFF")
     for src, rel in FILES:
         copy(src, out / rel)
     # The Visual C++ runtime, app-local (Microsoft's redistributable files, deployed next to the
