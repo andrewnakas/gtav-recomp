@@ -79,3 +79,42 @@ found` at boot (the 360's HDD cache partition is not mounted). Tried `--mount_ga
 - Still open: why the game never starts reading the pre-loaded 86-packet channel. The block
   switch is in the game's stream player (around sub_823CB180 / the stream slot objects at
   0x83A320C0 + 10296); reverse-engineering that is the next step.
+
+## Round 4 (2026-11-06)
+
+- Register watcher (`--xma_trace_buffers`: `xma watch:` lines, every guest write to a stream
+  context's 16 dwords, plus lock/kick/clear with the caller's LR). The next block's three
+  contexts (79/81/86 packets) are primed in one kick burst; the game sets output padding 3 on the
+  79/81 ones and 0 on the 86 one.
+- At the block switch (59 668 ms) the game services the 79/81 contexts every 16 ms (lock, advance
+  the output read offset in dword 9, kick) and **never writes, locks or kicks the 86-packet context
+  again**, not even once.
+- The priming pass filled that context's whole 12-block ring (padding 0), so write == read and
+  output valid was cleared. `xma_kick_one_decode` (on: a kick delivers at most
+  subframe_decode_count blocks, as the playing contexts show) makes the priming pass identical to
+  the other two (4 blocks, valid kept). Still stops at 59 668 ms, so the hardware state of that
+  context is not what the game is waiting on.
+- XMAPlayback (XDK library inside the game): sub_837FDEC8 copies each stream's 48-byte context
+  image to the hardware context and kicks every stream of the playback object (96-byte stream
+  records, count at +0); sub_837FDCE0 locks them; sub_837FDBA0 creates and clears the contexts.
+
+## Fixed (2026-11-06)
+
+Per-channel trace of the game's stream decoder (sub_831BE380, `[chan]` lines with
+`--gtav_trace_cutscene_audio`): each channel plays a block until its consumed sample count reaches
+the slot's end, then moves to the next block. Two channels got there; the third (the 27-packet
+block) stopped 384 samples short, so it never switched and the scene's stream froze at 59 668 ms.
+
+Cause: the decoder realigns ffmpeg's output by `kDecoderStartPadding` (192) samples, carrying the
+last 320 samples of every frame until the next frame is decoded. The last frame of a buffer was
+never followed by another, so its samples were never delivered. A block that ends exactly where
+the game's sample count needs it (this one: 441 frames decoded, 440.5 needed) came up short.
+
+Fix (`xma_flush_tail`, on): a pass with no input left delivers the carried tail (rest of the frame
+as silence), and only when the output ring has room for it plus padding. Writing it into a nearly
+full ring made write == read, which XMAPlayback (sub_837FDFF0) reads as "nothing decoded" when
+output valid is set, and the channel lost its 9 unread blocks. Verified: the Franklin and Lamar
+intro plays its whole track (to 308 047 ms) and the centre channel (dialogue) peaks at -13 dB
+instead of -120.
+
+`xma_kick_one_decode` (off) and the register watcher stay as tools.

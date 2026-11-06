@@ -10,7 +10,12 @@
 // waiting for. Also when the streams stopped moving before their end (see StreamDone). Root cause (missing end-of-stream completion in the runtime) is still open.
 
 #include <rex/hook.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
+#include <fmt/format.h>
+
+#include <string>
+#include <vector>
 
 #include <chrono>
 #include <cstdint>
@@ -80,4 +85,45 @@ REX_EXTERN(__imp__sub_824DC130);
 REX_HOOK_RAW(sub_824DC130) {
   UnstickCutsceneAudio(ctx, base);
   __imp__sub_824DC130(ctx, base);
+}
+
+// gtav_trace_cutscene_audio: the per-channel stream decoder (sub_831BE380, one object per channel,
+// two XMAPlayback slots of 40 bytes at +2632; +2712 current slot, +2716 next, +2744 queued slots).
+// A slot is released and the next one played when its consumed samples (+20) reach its end (+8).
+// Logs each channel object twice a second while it changes.
+REXCVAR_DECLARE(bool, gtav_trace_cutscene_audio);
+REX_EXTERN(__imp__sub_831BE380);
+REX_HOOK_RAW(sub_831BE380) {
+  const uint32_t obj = ctx.r3.u32;
+  __imp__sub_831BE380(ctx, base);
+  if (!REXCVAR_GET(gtav_trace_cutscene_audio)) return;
+  struct Seen {
+    uint32_t obj;
+    std::chrono::steady_clock::time_point next;
+    std::string last;
+  };
+  static thread_local std::vector<Seen> seen;
+  const auto now = std::chrono::steady_clock::now();
+  Seen* s = nullptr;
+  for (auto& e : seen)
+    if (e.obj == obj) s = &e;
+  if (!s) {
+    seen.push_back({obj, now, {}});
+    s = &seen.back();
+  }
+  if (now < s->next) return;
+  s->next = now + std::chrono::milliseconds(500);
+  std::string line = fmt::format("cur {} next {} state {} queued {} |", be32(base, obj + 2712), be32(base, obj + 2716),
+                                 be32(base, obj + 2720), be32(base, obj + 2744));
+  for (uint32_t i = 0; i < 2; i++) {
+    const uint32_t slot = obj + 2632 + i * 40;
+    const uint32_t pb = be32(base, slot);
+    uint32_t hw = 0;
+    if (pb) hw = be32(base, be32(base, pb + 8) + 64);
+    line += fmt::format(" slot{} pb {:08X} hw {:08X} end {} f12 {} f16 {} pos {} f32 {} |", i, pb, hw, be32(base, slot + 8),
+                        be32(base, slot + 12), be32(base, slot + 16), be32(base, slot + 20), be32(base, slot + 32));
+  }
+  if (line == s->last) return;
+  s->last = line;
+  REXLOG_INFO("[chan] {:08X} {}", obj, line);
 }

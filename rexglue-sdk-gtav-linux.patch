@@ -138,20 +138,21 @@ index f8949ca..dfab846 100644
  
  }  // namespace rex::audio::sdl
 diff --git a/include/rex/audio/xma/context.h b/include/rex/audio/xma/context.h
-index 8426798..9b78cc0 100644
+index 8426798..3714402 100644
 --- a/include/rex/audio/xma/context.h
 +++ b/include/rex/audio/xma/context.h
-@@ -206,6 +206,9 @@ class XmaContext {
+@@ -206,6 +206,10 @@ class XmaContext {
  
    int Setup(uint32_t id, memory::Memory* memory, uint32_t guest_ptr);
    bool Work();
 +  void LogState();  // xma_trace_buffers state dump
 +  void WatchRegisters();  // xma_trace_buffers: log guest writes to a stream context's registers
 +  void LogKick(const char* what);
++  bool FlushCarry(const XMA_CONTEXT_DATA& data);
  
    void Enable();
    bool Block(bool poll);
-@@ -270,6 +273,14 @@ class XmaContext {
+@@ -270,6 +274,14 @@ class XmaContext {
    std::unique_ptr<rex::thread::Event> work_completion_event_;
  
    uint32_t id_ = 0;
@@ -166,7 +167,7 @@ index 8426798..9b78cc0 100644
    uint32_t guest_ptr_ = 0;
    std::mutex lock_;
    std::atomic<bool> is_allocated_ = false;
-@@ -279,6 +290,10 @@ class XmaContext {
+@@ -279,6 +291,10 @@ class XmaContext {
    AVPacket* av_packet_ = nullptr;
    AVCodec* av_codec_ = nullptr;
    AVCodecContext* av_context_ = nullptr;
@@ -951,7 +952,7 @@ index 20a2cd8..2689059 100644
      }
    }
 diff --git a/src/audio/xma_context.cpp b/src/audio/xma_context.cpp
-index 11b83be..7d4da8b 100644
+index 11b83be..03b95e1 100644
 --- a/src/audio/xma_context.cpp
 +++ b/src/audio/xma_context.cpp
 @@ -9,12 +9,20 @@
@@ -975,7 +976,7 @@ index 11b83be..7d4da8b 100644
  #include <rex/dbg.h>
  #include <rex/logging.h>
  #include <rex/memory/ring_buffer.h>
-@@ -36,10 +44,138 @@ extern "C" {
+@@ -36,10 +44,147 @@ extern "C" {
  // Credits for most of this code goes to:
  // https://github.com/koolkdev/libertyv/blob/master/libav_wrapper/xma2dec.c
  
@@ -999,6 +1000,15 @@ index 11b83be..7d4da8b 100644
 +                    "whenever they have input and output space; off = one decode pass per kick");
 +REXCVAR_DEFINE_BOOL(xma_output_keep_free_block, false, "Audio",
 +                    "Never fill an XMA output ring completely (write == read must mean empty)");
++REXCVAR_DEFINE_BOOL(xma_kick_one_decode, false, "Audio",
++                    "A kick delivers at most subframe_decode_count output blocks, as the hardware does. GTA V "
++                    "primes the next block of a cutscene stream with one kick and waits for those blocks; "
++                    "filling the whole ring (write == read, valid cleared) left that channel waiting forever");
++REXCVAR_DEFINE_BOOL(xma_flush_tail, true, "Audio",
++                    "When a context is kicked with no input left, deliver the last decoded frame's tail held "
++                    "back for realignment (it waits for the next frame otherwise). GTA V stream channels "
++                    "count every sample of a block before playing the next; without it a cutscene channel "
++                    "stopped 384 samples short and the dialogue stopped after the first block");
 +REXCVAR_DEFINE_BOOL(xma_trace_buffers, false, "Audio",
 +                    "Log every XMA input buffer swap and every buffer the game (re)validates, per context");
 +REXCVAR_DEFINE_BOOL(xma_starved_reset, true, "Audio",
@@ -1114,7 +1124,7 @@ index 11b83be..7d4da8b 100644
  const uint32_t XmaContext::kBitsPerPacketHeader;
  const uint32_t XmaContext::kOutputMaxSizeBytes;
  
-@@ -50,6 +186,9 @@ XmaContext::~XmaContext() {
+@@ -50,6 +195,9 @@ XmaContext::~XmaContext() {
    if (av_context_) {
      avcodec_free_context(&av_context_);
    }
@@ -1124,7 +1134,7 @@ index 11b83be..7d4da8b 100644
    if (av_frame_) {
      av_frame_free(&av_frame_);
    }
-@@ -98,13 +237,59 @@ bool XmaContext::Work() {
+@@ -98,25 +246,90 @@ bool XmaContext::Work() {
    }
  
    std::lock_guard<std::mutex> lock(lock_);
@@ -1157,7 +1167,7 @@ index 11b83be..7d4da8b 100644
 +    traced_valid_ = valid;
 +    // Big buffers (stream blocks): saved for offline decoding, with the context registers.
 +    static int dumped = 0;
-+    if (valid && data.GetCurrentInputBufferPacketCount() >= 70 && dumped < 40 &&
++    if (valid && data.GetCurrentInputBufferPacketCount() >= 20 && dumped < 400 &&
 +        data.GetCurrentInputBufferAddress() != dumped_ptr_) {
 +      dumped_ptr_ = data.GetCurrentInputBufferAddress();
 +      traced_passes_ = 0;
@@ -1175,7 +1185,7 @@ index 11b83be..7d4da8b 100644
 +  }
  
    if (!data.output_buffer_valid) {
-+    if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_passes_ < 400 &&
++    if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_passes_ < 4000 &&
 +        (data.input_buffer_0_ptr == dumped_ptr_ || data.input_buffer_1_ptr == dumped_ptr_)) {
 +      ++traced_passes_;
 +      REXLOG_INFO("xma: ctx {} pass skipped: output not valid (read {} w/r {}/{})", id_,
@@ -1185,8 +1195,28 @@ index 11b83be..7d4da8b 100644
      return true;
    }
  
-@@ -117,6 +302,10 @@ bool XmaContext::Work() {
+   memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);
++  const uint32_t ring_start_write = output_rb.write_offset();
++
++  const bool flushed = !data.IsAnyInputBufferValid() && FlushCarry(data);
+ 
+   // Consume-only context: no input, just drain remaining subframes.
+   if (data.IsConsumeOnlyContext()) {
+     if (current_frame_remaining_subframes_ == 0) {
+       return true;
      }
++    // Room for this part of the frame (plus the padding after its last part); otherwise wait for
++    // the game to read and kick again. Writing past the read offset made write == read, which the
++    // game's XMAPlayback reads as "nothing decoded" (output valid set): it lost the whole ring.
++    {
++      const int32_t sdc = std::max<int32_t>(1, data.subframe_decode_count);
++      const int32_t part = std::min<int32_t>(current_frame_remaining_subframes_, sdc);
++      const int32_t need = part + data.output_buffer_padding;
++      if (data.output_buffer_block_count != 0 && remaining_subframe_blocks_in_output_buffer_ < need) {
++        StoreContextMerged(data, initial_data, context_ptr);
++        return true;
++      }
++    }
      Consume(&output_rb, &data);
      data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
 +    if (data.output_buffer_block_count != 0 && output_rb.empty() &&
@@ -1196,9 +1226,12 @@ index 11b83be..7d4da8b 100644
      StoreContextMerged(data, initial_data, context_ptr);
      return true;
    }
-@@ -133,21 +322,91 @@ bool XmaContext::Work() {
+@@ -132,22 +345,100 @@ bool XmaContext::Work() {
+     return true;
    }
  
++  const uint32_t pass_start_write = output_rb.write_offset();
++  const uint32_t ring_bytes = output_rb.capacity();
    while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count) {
 +    const uint32_t pre_decode_offset = data.input_buffer_read_offset;
 +    const uint8_t pre_remaining_subframes = current_frame_remaining_subframes_;
@@ -1207,6 +1240,12 @@ index 11b83be..7d4da8b 100644
      Consume(&output_rb, &data);
  
 -    if (!data.IsAnyInputBufferValid() || data.error_status == 4) {
++    if (REXCVAR_GET(xma_kick_one_decode) && ring_bytes) {
++      const uint32_t written =
++          (output_rb.write_offset() + ring_bytes - pass_start_write) % ring_bytes / kOutputBytesPerBlock;
++      if (written >= effective_sdc) break;
++    }
++
 +    // Don't abandon a partially consumed frame (xenia-canary fix). Consume() hands over at most
 +    // subframe_decode_count blocks per pass, so the pass that exhausts the input usually leaves
 +    // the rest of the last frame undelivered; nothing would kick the context again to deliver it
@@ -1224,7 +1263,7 @@ index 11b83be..7d4da8b 100644
    }
  
 -  data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
-+  if (initial_data.IsAnyInputBufferValid()) {
++  if (initial_data.IsAnyInputBufferValid() || flushed || output_rb.write_offset() != ring_start_write) {
 +    data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
 +  } else if (REXCVAR_GET(xma_starved_reset) &&
 +             data.output_buffer_write_offset != data.output_buffer_read_offset) {
@@ -1245,7 +1284,7 @@ index 11b83be..7d4da8b 100644
      data.output_buffer_valid = 0;
    }
  
-+  if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_passes_ < 400 &&
++  if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_passes_ < 4000 &&
 +      (initial_data.input_buffer_0_ptr == dumped_ptr_ || initial_data.input_buffer_1_ptr == dumped_ptr_)) {
 +    ++traced_passes_;
 +    REXLOG_INFO("xma: ctx {} pass: read {} -> {} cur {} -> {} valid {}{} -> {}{} out w/r {}/{} -> {} valid {} -> {} "
@@ -1291,7 +1330,7 @@ index 11b83be..7d4da8b 100644
    return true;
  }
  
-@@ -192,13 +451,16 @@ void XmaContext::ClearLocked(XMA_CONTEXT_DATA* data) {
+@@ -192,13 +483,16 @@ void XmaContext::ClearLocked(XMA_CONTEXT_DATA* data) {
  void XmaContext::ResetDecoderState() {
    // A freed or re-initialized context is a new logical stream, so the previous
    // wave's MDCT overlap-add tail must not survive into frame 0 of the next one.
@@ -1315,7 +1354,7 @@ index 11b83be..7d4da8b 100644
    }
    raw_frame_.fill(0);
    decoded_frame_.fill(0);
-@@ -226,7 +488,49 @@ void XmaContext::Release() {
+@@ -226,7 +520,69 @@ void XmaContext::Release() {
    std::memset(context_ptr, 0, sizeof(XMA_CONTEXT_DATA));
  }
  
@@ -1335,8 +1374,28 @@ index 11b83be..7d4da8b 100644
 +              uint32_t(d.is_stereo), uint32_t(d.sample_rate));
 +}
 +
++// The decoder's output lags the bitstream by kDecoderStartPadding samples: each frame's last part
++// is carried until the next frame is decoded. With no input left, emit it now (the rest of that
++// frame, the codec's overlap tail, as silence) so the block's sample count is complete. A later
++// refill starts a fresh carry, so the stream stays sample-aligned either way.
++bool XmaContext::FlushCarry(const XMA_CONTEXT_DATA& data) {
++  if (!REXCVAR_GET(xma_flush_tail) || !carry_valid_ || current_frame_remaining_subframes_ != 0) return false;
++  const size_t pad_bytes = kDecoderStartPadding * kBytesPerSample << data.is_stereo;
++  const size_t carry_bytes = (kBytesPerFrameChannel << data.is_stereo) - pad_bytes;
++  std::memcpy(raw_frame_.data(), carry_frame_.data(), carry_bytes);
++  std::memset(raw_frame_.data() + carry_bytes, 0, pad_bytes);
++  current_frame_remaining_subframes_ = 4 << data.is_stereo;
++  loop_frame_output_limit_ = pending_output_limit_;
++  current_frame_remaining_subframes_ -= std::min(pending_start_skip_, current_frame_remaining_subframes_);
++  pending_output_limit_ = 0;
++  pending_start_skip_ = 0;
++  carry_valid_ = false;
++  if (REXCVAR_GET(xma_trace_buffers)) REXLOG_INFO("xma: ctx {} input done: flushed the last frame's tail", id_);
++  return true;
++}
++
 +void XmaContext::WatchRegisters() {
-+  if (!is_allocated() || !dumped_ptr_ || watch_logs_ >= 3000) return;
++  if (!is_allocated() || !dumped_ptr_ || watch_logs_ >= 20000) return;
 +  const auto* p = reinterpret_cast<const uint32_t*>(memory()->TranslateVirtual(guest_ptr()));
 +  uint32_t now[16];
 +  for (int i = 0; i < 16; i++) now[i] = rex::byte_swap(p[i]);
@@ -1350,7 +1409,7 @@ index 11b83be..7d4da8b 100644
 +}
 +
 +void XmaContext::LogKick(const char* what) {
-+  if (dumped_ptr_ && watch_logs_ < 3000) {
++  if (dumped_ptr_ && watch_logs_ < 20000) {
 +    ++watch_logs_;
 +    REXLOG_INFO("xma watch: ctx {} {}", id_, what);
 +  }
@@ -1365,7 +1424,7 @@ index 11b83be..7d4da8b 100644
    if (data->current_buffer == 0) {
      data->input_buffer_0_valid = 0;
    } else {
-@@ -339,8 +643,13 @@ memory::RingBuffer XmaContext::PrepareOutputRingBuffer(XMA_CONTEXT_DATA* data) {
+@@ -339,8 +695,13 @@ memory::RingBuffer XmaContext::PrepareOutputRingBuffer(XMA_CONTEXT_DATA* data) {
    memory::RingBuffer output_rb(output_buffer, output_capacity);
    output_rb.set_read_offset(output_read_offset);
    output_rb.set_write_offset(output_write_offset);
@@ -1381,7 +1440,7 @@ index 11b83be..7d4da8b 100644
  
    return output_rb;
  }
-@@ -414,10 +723,31 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
+@@ -414,10 +775,31 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
      fresh.output_buffer_valid = 0;
    }
  
@@ -1416,7 +1475,7 @@ index 11b83be..7d4da8b 100644
  
    fresh.Store(context_ptr);
  }
-@@ -476,7 +806,30 @@ int XmaContext::PrepareDecoder(int sample_rate, bool is_two_channel) {
+@@ -476,7 +858,30 @@ int XmaContext::PrepareDecoder(int sample_rate, bool is_two_channel) {
        av_context_->channels != static_cast<int>(channels)) {
      REXAPU_NOISY_DEBUG("XmaContext {}: Codec reinit: rate {} -> {}, channels {} -> {}", id(),
                         av_context_->sample_rate, sample_rate, av_context_->channels, channels);
@@ -1448,11 +1507,11 @@ index 11b83be..7d4da8b 100644
      av_context_ = avcodec_alloc_context3(av_codec_);
  
      av_context_->sample_rate = sample_rate;
-@@ -667,9 +1020,48 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
+@@ -667,9 +1072,48 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
    }
    PreparePacket(packet_info.current_frame_size_, padding_start);
    const bool decoded = DecodePacket(av_context_, av_packet_, av_frame_);
-+  if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_frames_ < 60 &&
++  if (REXCVAR_GET(xma_trace_buffers) && dumped_ptr_ && traced_frames_ < 2000 &&
 +      data->GetCurrentInputBufferAddress() == dumped_ptr_) {
 +    ++traced_frames_;
 +    REXLOG_INFO("xma: ctx {} frame at bit {} (packet {}, rel {}) size {} bits, padding {}, decoded {}, carry {}, "
@@ -1498,7 +1557,7 @@ index 11b83be..7d4da8b 100644
      // Realign the decoder's output onto the bitstream's sample numbering: the
      // samples of the frame just decoded run from kDecoderStartPadding into this
 diff --git a/src/audio/xma_decoder.cpp b/src/audio/xma_decoder.cpp
-index a0a178d..fedc51b 100644
+index a0a178d..9bf7599 100644
 --- a/src/audio/xma_decoder.cpp
 +++ b/src/audio/xma_decoder.cpp
 @@ -12,6 +12,14 @@
@@ -1574,7 +1633,7 @@ index a0a178d..fedc51b 100644
          auto& context = contexts_[context_id];
 +        if (REXCVAR_GET(xma_trace_buffers)) {
 +          context.WatchRegisters();
-+          const auto* ppc = static_cast<const PPCContext*>(tls_mmio_ppc_context_);
++          const auto* ts = runtime::ThreadState::Get(); const PPCContext* ppc = ts ? ts->context() : nullptr;
 +          context.LogKick(fmt::format("kick from lr {:08X}", ppc ? uint32_t(ppc->lr) : 0).c_str());
 +        }
          context.Enable();
@@ -1598,7 +1657,7 @@ index a0a178d..fedc51b 100644
          auto& context = contexts_[context_id];
 +        if (REXCVAR_GET(xma_trace_buffers)) {
 +          context.WatchRegisters();
-+          const auto* ppc = static_cast<const PPCContext*>(tls_mmio_ppc_context_);
++          const auto* ts = runtime::ThreadState::Get(); const PPCContext* ppc = ts ? ts->context() : nullptr;
 +          context.LogKick(fmt::format("lock (disable) from lr {:08X}", ppc ? uint32_t(ppc->lr) : 0).c_str());
 +        }
          context.Disable();
@@ -4165,10 +4224,10 @@ index c24fbd1..0663781 100644
    return 1;
  }
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
-index 76cc877..ff4ba63 100644
+index 76cc877..c2990df 100644
 --- a/src/system/xmemory.cpp
 +++ b/src/system/xmemory.cpp
-@@ -13,7 +13,7 @@
+@@ -13,12 +13,14 @@
  #include <cstring>
  #include <utility>
  
@@ -4177,7 +4236,14 @@ index 76cc877..ff4ba63 100644
  #include <sys/mman.h>
  #endif
  
-@@ -363,6 +363,27 @@ int Memory::MapViews(uint8_t* mapping_base) {
+ #include <fmt/format.h>
+ 
++#include <rex/ppc/context.h>
++#include <rex/system/thread_state.h>
+ #include <rex/assert.h>
+ #include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
+@@ -363,6 +365,27 @@ int Memory::MapViews(uint8_t* mapping_base) {
    // 0xE0000000 4 KB offset is emulated via host_address_offset and on the CPU
    // side if system allocation granularity is bigger than 4 KB.
    uint64_t granularity_mask = ~uint64_t(system_allocation_granularity_ - 1);
@@ -4205,6 +4271,19 @@ index 76cc877..ff4ba63 100644
    for (size_t n = 0; n < rex::countof(map_info); n++) {
      views_.all_views[n] = reinterpret_cast<uint8_t*>(rex::memory::MapFileView(
          mapping_, mapping_base + map_info[n].virtual_address_start,
+@@ -547,6 +570,12 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
+         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
+         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
+         rex::thread::current_thread_id());
++    // Where in the game: the guest LR (return address of the last call made) and stack pointer.
++    if (auto* ts = runtime::ThreadState::Get(); ts && ts->context()) {
++      const auto* ctx = ts->context();
++      REXSYS_ERROR("  guest lr 0x{:08X} sp 0x{:08X} r3 0x{:08X} r31 0x{:08X}", uint32_t(ctx->lr), ctx->r1.u32,
++                   ctx->r3.u32, ctx->r31.u32);
++    }
+     return false;
+   }
+ 
 diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
 index d358f39..145de50 100644
 --- a/src/system/xobject.cpp
