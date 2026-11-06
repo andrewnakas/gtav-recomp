@@ -45,7 +45,8 @@ First run
 
 Later runs: opening GTAV.app starts the game directly. Hold Option while opening it to get the
 setup window again (for example after moving your discs, or to repair the install).
-Esc in game opens the settings menu (quality presets, frame rate limit, VSync, FPS counter).
+F1 in game opens the settings menu (fullscreen, resolution, frame rate limit, VSync, controls,
+Create bug report); with a controller, RB + Back. Keyboard and mouse use GTA V PC's default keys.
 Keyboard: Space = A, Backspace = B, Return = Start, WASD = left stick, arrows = right stick.
 Logs: <game folder>/data/logs (gtav.log for the game, install.log for setup).
 

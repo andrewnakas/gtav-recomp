@@ -57,8 +57,13 @@ your discs.
 
 Game options go after "--". On a laptop with two GPUs, pick the dedicated one with
   ./gtav_launcher -- --vulkan_device=1
-Esc in game opens the settings menu (quality presets, frame rate limit, VSync, FPS counter).
+F1 in game opens the settings menu (fullscreen, resolution, frame rate limit, VSync, controls,
+Create bug report); with a controller, RB + Back. Keyboard and mouse use GTA V PC's default keys.
 The game log is data/logs/gtav.log, the setup log data/logs/install.log.
+
+Steam Deck: in desktop mode Steam keeps the Deck's controls on its desktop layout (trackpad =
+mouse), so the game sees no controller. Add gtav_launcher to Steam (Add a Non-Steam Game), start it
+from Steam and pick the Gamepad controller layout.
 
 iPhone (experimental)
 ---------------------

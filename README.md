@@ -121,6 +121,10 @@ get the setup window (redo setup, or **Build for iPhone** / **Build for Android*
 Later: the menu entry or `./gtav_launcher` starts the game. `./gtav_launcher --setup` (or the menu
 entry's "Run setup again") opens the setup window with the phone buttons. Logs: `data/logs`.
 
+**Steam Deck**: in desktop mode Steam keeps the Deck's controls on its desktop layout (trackpad =
+mouse), so the game sees no controller. Add `gtav_launcher` to Steam (*Add a Non-Steam Game*),
+start it from Steam (desktop or Game Mode) and pick the *Gamepad* controller layout.
+
 ## macOS
 
 1. Download `gtav-recomp-macos-arm64.zip`, unzip it, and move `GTAV.app` to Applications.
@@ -130,7 +134,7 @@ entry's "Run setup again") opens the setup window with the phone buttons. Logs: 
    `~/Library/Application Support/GTAV Recomp`), then press **Install**, then **Play**.
 
 Later: opening `GTAV.app` starts the game. Hold **Option** while opening it to get the setup window
-with **Build for iPhone** / **Build for Android**. Esc in game opens the settings menu.
+with **Build for iPhone** / **Build for Android**. F1 in game opens the settings menu.
 
 ## iPhone
 
