@@ -16,7 +16,19 @@
 #include <thread>
 #include <vector>
 
-#if defined(__linux__) && !defined(__ANDROID__)
+// GTAV_WW_FORCE_PAGEPROT (Linux test builds): use the Windows/Android page-protection watch.
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(GTAV_WW_FORCE_PAGEPROT)
+#define GTAV_WW_UFFD 1
+#else
+#define GTAV_WW_UFFD 0
+#endif
+#if defined(_WIN32) || defined(__ANDROID__) || defined(GTAV_WW_FORCE_PAGEPROT)
+#define GTAV_WW_PAGEPROT 1
+#else
+#define GTAV_WW_PAGEPROT 0
+#endif
+
+#if GTAV_WW_UFFD
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <linux/userfaultfd.h>
@@ -97,7 +109,7 @@ void Mark(uint32_t physical, uint64_t bytes, uint64_t epoch) {
   for (uint32_t p = first; p <= last; p++) g_page_epoch[p].store(epoch, std::memory_order_release);
 }
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
 // The guest views that alias physical memory (SDK map_info): 64 KB, 16 MB and 4 KB page views of
 // all 512 MB, and the GPU writeback window over the first 16 MB.
 struct View {
@@ -207,7 +219,7 @@ bool ScanView(const View& v, uint64_t start, uint64_t end, bool protect, uint64_
   }
   return true;
 }
-#elif defined(_WIN32) || defined(__ANDROID__)
+#elif GTAV_WW_PAGEPROT
 // Windows has no userfaultfd, and GetWriteWatch does not work on the SDK's file-mapped guest views.
 // Android neither (kernel 5.10 has no async write-protect, and SELinux denies apps userfaultfd).
 // The SDK's own physical write watch does: EnablePhysicalMemoryAccessCallbacks makes the pages
@@ -258,7 +270,7 @@ bool Enabled() {
   return g_ready;
 }
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
 namespace {
 // Unprotected pages of a view (written, or never protected): the runs of them copies were made
 // from are marked and protected again, each run in one call (PAGEMAP_SCAN reports what it
@@ -334,7 +346,7 @@ bool HarvestView(const View& v, uint64_t epoch) {
 }  // namespace
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
 namespace {
 void HarvestOne(uint32_t i, uint64_t epoch) {
   const View& v = g_views[i];
@@ -381,14 +393,14 @@ std::once_flag g_helpers_started;
 
 void Harvest() {
   if (!Enabled()) return;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
   auto start = std::chrono::steady_clock::now();
   uint64_t epoch = g_epoch.fetch_add(1, std::memory_order_acq_rel) + 1;
   std::call_once(g_helpers_started, [] { g_helpers.Start(); });
   g_helpers.Run(epoch);
   g_harvests++;
   g_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-#elif defined(_WIN32) || defined(__ANDROID__)
+#elif GTAV_WW_PAGEPROT
   g_harvests++;  // writes are reported as they happen (OnWrite)
 #endif
 }
@@ -397,7 +409,7 @@ uint64_t Watch(uint32_t physical, uint32_t size) {
   if (!g_ready || !size) return 0;
   physical &= kPhysicalSize - 1;
   if (uint64_t(physical) + size > kPhysicalSize) return 0;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
   // Pages no copy was made from yet are not protected: protect them in every view (before the
   // caller reads them). UFFDIO_WRITEPROTECT also covers pages without page tables yet.
   uint32_t first = physical >> kPageShift, last = (physical + size - 1) >> kPageShift;
@@ -428,7 +440,7 @@ uint64_t Watch(uint32_t physical, uint32_t size) {
     }
   }
   return g_epoch.load(std::memory_order_acquire);
-#elif defined(_WIN32) || defined(__ANDROID__)
+#elif GTAV_WW_PAGEPROT
   if (physical < kUnwatchedBelow) return 0;
   // The epoch is taken before arming: a write that faults after arming gets a later one.
   uint64_t epoch = g_epoch.load(std::memory_order_acquire);
@@ -451,7 +463,7 @@ uint64_t Watch(uint32_t physical, uint32_t size) {
 }
 
 bool Pending(uint32_t physical, uint32_t size) {
-#if defined(__linux__) && !defined(__ANDROID__)
+#if GTAV_WW_UFFD
   if (!g_ready || !size) return false;
   physical &= kPhysicalSize - 1;
   auto* mem = REX_KERNEL_MEMORY();
@@ -466,7 +478,7 @@ bool Pending(uint32_t physical, uint32_t size) {
     ScanView(v, host + lo, host + hi, false, 0);
   }
   return g_found != 0;
-#elif defined(_WIN32) || defined(__ANDROID__)
+#elif GTAV_WW_PAGEPROT
   if (!g_ready || !size) return false;
   physical &= kPhysicalSize - 1;
   uint32_t first = physical >> kPageShift;
@@ -495,7 +507,7 @@ void Touch(uint32_t physical, uint32_t size) {
 }
 
 Stats TakeStats() {
-#if defined(_WIN32) || defined(__ANDROID__)
+#if GTAV_WW_PAGEPROT
   Stats s{g_faults.exchange(0), g_pages.exchange(0), g_ms};
 #else
   Stats s{g_harvests, g_pages.exchange(0), g_ms};
