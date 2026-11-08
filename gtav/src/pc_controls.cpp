@@ -61,6 +61,7 @@ REX_EXTERN(sub_82C835F0);         // IS_PAUSE_MENU_ACTIVE()
 REX_EXTERN(sub_82D57A40);         // GET_SELECTED_PED_WEAPON(ped)
 REX_EXTERN(sub_82D5C080);         // HAS_PED_GOT_WEAPON(ped, hash, 0)
 REX_EXTERN(sub_82D5BFD0);         // SET_CURRENT_PED_WEAPON(ped, hash, equip_now)
+REX_EXTERN(sub_82D5C0C8);         // GIVE_WEAPON_TO_PED(ped, hash, ammo, hidden, equip_now)
 REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
 REX_EXTERN(sub_82C9ADD8);         // GET_ENTITY_COORDS(entity, alive) -> vector3
 REX_EXTERN(sub_82D5F218);         // GET_CLOSEST_VEHICLE(x, y, z, radius, model, flags)
@@ -420,6 +421,19 @@ REX_HOOK_RAW(sub_82CE9CA8) {
                         Call(ctx, base, sub_82D1FEC8, {Joaat(arg)}));
           REXLOG_INFO("[controls] debug command '{}'", cmd);
           if (cmd == "kill") Call(ctx, base, sub_82C9C078, {ped, 0});
+          if (cmd == "weapon") {  // "weapon": give a carbine rifle (9999 rounds) and equip a gun (audio tests)
+            Call(ctx, base, sub_82D5C0C8, {ped, Joaat("WEAPON_CARBINERIFLE"), 9999, 0, 1});
+            uint32_t equipped = 0;
+            for (const char* w : {"WEAPON_CARBINERIFLE", "WEAPON_ASSAULTRIFLE", "WEAPON_ADVANCEDRIFLE",
+                                  "WEAPON_SMG", "WEAPON_MICROSMG", "WEAPON_PISTOL", "WEAPON_COMBATPISTOL"}) {
+              if (!Has(ctx, base, ped, Joaat(w))) continue;
+              Call(ctx, base, sub_82D5BFD0, {ped, Joaat(w), 1});
+              REXLOG_INFO("[controls] debug weapon: {}", w);
+              equipped = 1;
+              break;
+            }
+            if (!equipped) REXLOG_INFO("[controls] debug weapon: player has no gun");
+          }
 
           if (cmd == "car") {  // the nearest vehicle, driver's seat
             uint32_t xyz[3];
