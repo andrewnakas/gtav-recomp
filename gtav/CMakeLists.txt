@@ -63,6 +63,7 @@ set(GTAV_SOURCES
     src/main.cpp
     src/crash_handler.cpp
     src/cutscene_audio_fix.cpp
+    src/crash_guards.cpp
     src/pc_controls.cpp
     src/bug_report.cpp
     src/frame_limit.cpp
