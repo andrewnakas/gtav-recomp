@@ -62,6 +62,7 @@ REX_EXTERN(sub_82D57A40);         // GET_SELECTED_PED_WEAPON(ped)
 REX_EXTERN(sub_82D5C080);         // HAS_PED_GOT_WEAPON(ped, hash, 0)
 REX_EXTERN(sub_82D5BFD0);         // SET_CURRENT_PED_WEAPON(ped, hash, equip_now)
 REX_EXTERN(sub_82D5C0C8);         // GIVE_WEAPON_TO_PED(ped, hash, ammo, hidden, equip_now)
+REX_EXTERN(sub_82D574F8);         // GET_AMMO_IN_PED_WEAPON(ped, hash)
 REX_EXTERN(sub_82C9C078);         // SET_ENTITY_HEALTH(entity, health)
 REX_EXTERN(sub_82C9ADD8);         // GET_ENTITY_COORDS(entity, alive) -> vector3
 REX_EXTERN(sub_82D5F218);         // GET_CLOSEST_VEHICLE(x, y, z, radius, model, flags)
@@ -447,6 +448,8 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             if (!equipped) REXLOG_INFO("[controls] debug weapon: player has no gun");
           }
 
+          if (cmd == "ammo")  // carbine rifle rounds left (did scripted firing shoot?)
+            REXLOG_INFO("[controls] debug ammo: {}", Call(ctx, base, sub_82D574F8, {ped, Joaat("WEAPON_CARBINERIFLE")}));
           if (cmd == "pos") {  // the player's position (respawn checks: it jumps to a hospital)
             uint32_t xyz[3];
             CallVector(ctx, base, sub_82C9ADD8, {ped, 1}, xyz);
