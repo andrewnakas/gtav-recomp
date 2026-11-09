@@ -670,6 +670,55 @@ class Installer {
     return true;
   }
 
+  // Game files the player copied over from a PC install (Android: USB copy instead of the discs,
+  // which needs about half the free space). Every file the install would make must be there with
+  // its size; the executable and the patch are hashed, as the recompiled code needs exactly those.
+  bool RunAdopt(const fs::path& expected, std::wstring* error) {
+    error_ = error;
+    std::error_code ec;
+    fs::create_directories(data_ / L"logs", ec);
+    log_.open(data_ / L"logs" / L"install.log", std::ios::app);
+    Log(L"---- adopting copied game files");
+    if (!expected_.Load(expected, error)) return false;
+    ui_.Stage(L"Checking the copied game files...");
+    std::vector<std::pair<fs::path, uint64_t>> want;
+    for (auto& [path, exp] : expected_.disc2) want.push_back({data_ / L"game" / Widen(path), exp.size});
+    for (auto& [path, exp] : expected_.tu)
+      want.push_back({data_ / (path == "update.rpf" ? L"update" : L"game") / Widen(path), exp.size});
+    for (auto& [path, exp] : expected_.part)
+      want.push_back({data_ / L"user" / L"0000000000000000" / Widen(kTitleId) / L"00000002" / Widen(path), exp.size});
+    std::vector<std::wstring> bad;
+    for (auto& [file, size] : want) {
+      const uint64_t have = fs::file_size(file, ec);
+      if (ec || have != size) {
+        const bool missing = bool(ec);
+        bad.push_back(fs::relative(file, data_, ec).wstring() + (missing ? L" (missing)" : L" (wrong size)"));
+        Log(L"copied files: " + bad.back());
+      }
+    }
+    if (!bad.empty()) {
+      std::wstring e = Num(bad.size()) + L" of " + Num(want.size()) + L" game files are missing or incomplete, "
+                       L"for example:\n";
+      for (size_t i = 0; i < bad.size() && i < 4; ++i) e += L"  data/" + bad[i] + L"\n";
+      return SetError(e + L"Copy the folders game, update and user from data on your PC into " + data_.wstring() +
+                      L" (all three, completely), then press Install again.");
+    }
+    ui_.Progress(0.5);
+    for (const char* f : {"default.xex", "default.xexp"}) {
+      const Expected* exp = Find(std::string(f) == "default.xex" ? expected_.disc2 : expected_.tu, f);
+      std::string sha;
+      uint64_t size = 0;
+      if (!exp || !HashFile(data_ / L"game" / Widen(f), &sha, &size) || sha != exp->sha256)
+        return SetError(L"The copied " + Widen(f) + L" is not the one this recompilation was made for "
+                        L"(Disc 2 executable and Title Update 27).");
+    }
+    std::ofstream(data_ / L"data_installed.txt") << kDataVersion << "\n";
+    ui_.Progress(1.0);
+    ui_.Stage(L"Done.");
+    Log(L"---- copied game files adopted (" + Num(want.size()) + L" files)");
+    return true;
+  }
+
   // Game data only (the iPhone app's setup screen: its game code and shaders were built on the
   // player's Mac): the same checked copies into <home>/data, no codegen.
   bool RunData(const fs::path& expected, std::wstring* error) {
@@ -1699,6 +1748,11 @@ bool RunDataInstall(const fs::path& home, const fs::path& expected, const Instal
                     std::wstring* error) {
   Installer inst(home, home, in, ui);
   return inst.RunData(expected, error);
+}
+
+bool AdoptCopiedData(const fs::path& home, const fs::path& expected, InstallUi& ui, std::wstring* error) {
+  Installer inst(home, home, InstallInputs{}, ui);
+  return inst.RunAdopt(expected, error);
 }
 
 bool IsDataInstalled(const fs::path& home) {

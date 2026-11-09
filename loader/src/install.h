@@ -30,6 +30,10 @@ class InstallUi {
 // Disc 1 install partitions into home/data/user, each checked against `expected` (expected.txt).
 bool RunDataInstall(const std::filesystem::path& home, const std::filesystem::path& expected,
                     const InstallInputs& in, InstallUi& ui, std::wstring* error);
+// Game files copied from a PC install into home/data/{game,update,user} (Android, instead of the
+// discs): checks they are all there (sizes; the executable and patch hashed) and marks them installed.
+bool AdoptCopiedData(const std::filesystem::path& home, const std::filesystem::path& expected, InstallUi& ui,
+                     std::wstring* error);
 bool IsDataInstalled(const std::filesystem::path& home);
 // iPhone, on any desktop system: from the installed game, <home>/iphone/GTAV.ipa (the package's iOS
 // shell with gtav_game.dylib built for iOS and the shaders translated for it; no game files: the

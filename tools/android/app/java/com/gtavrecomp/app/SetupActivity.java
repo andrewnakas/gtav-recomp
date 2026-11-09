@@ -52,6 +52,7 @@ public class SetupActivity extends Activity {
 
     private native String nativeInstall(String home, String expected, String disc1, String disc2, String tu);
     private static native boolean nativeIsDataInstalled(String home);
+    private native String nativeAdopt(String home, String expected);
 
     private static final String[] LABELS = {
         "Game pack (gtav-android-pack.zip from Build for Android on your PC)",
@@ -125,6 +126,14 @@ public class SetupActivity extends Activity {
         return getExternalFilesDir(null);
     }
 
+    /** Game files copied over from a PC install (not yet checked). */
+    private boolean copied() {
+        File data = new File(home(), "data");
+        return new File(data, "game/default.xex").exists() && new File(data, "update").isDirectory()
+            && new File(data, "user").isDirectory()
+            && !new File(data, "install_state.txt").exists();  // that is a disc install to resume
+    }
+
     private File packDir() {
         return new File(getFilesDir(), "pack");
     }
@@ -183,6 +192,10 @@ public class SetupActivity extends Activity {
             + "your PC (Build for Android in the PC launcher, after setting the game up there), copy "
             + "it and your disc images and title update to this phone (for example to Download), "
             + "choose them below and press Install. About 16 GB is copied and checked.", 14));
+        box.addView(text("Short on space? Copy the game files from your PC instead of the discs: open this "
+            + "app once, then copy the folders game, update and user from the data folder of your PC "
+            + "install into " + new File(home(), "data") + " (by USB), choose only the game pack and "
+            + "press Install. That needs about 16 GB instead of about 40.", 13));
         for (int i = 0; i < 4; i++) {
             final int slot = i;
             box.addView(text(LABELS[i], 15));
@@ -232,13 +245,16 @@ public class SetupActivity extends Activity {
             String name = picked[i] != null ? displayName(picked[i]) : null;
             if (i == PACK && pack == null && picked[i] == null) name = "(installed)";
             if (i != PACK && data && picked[i] == null) name = "(game files installed)";
+            else if (i != PACK && copied() && picked[i] == null) name = "(not needed: copied game files found)";
             pickedText[i].setText(name != null ? name : "not chosen");
             pickButtons[i].setEnabled(!busy);
         }
         install.setText(busy ? "Cancel" : "Install");
         if (!busy) {
             if (pack == null && data) status.setText("Ready.");
-            else status.setText((pack != null ? pack + " " : "") + (data ? "" : "Game files not installed yet."));
+            else status.setText((pack != null ? pack + " " : "") + (data ? "" : copied()
+                ? "Game files copied from a PC found: press Install to check them."
+                : "Game files not installed yet."));
         }
     }
 
@@ -311,6 +327,9 @@ public class SetupActivity extends Activity {
                 if (now != null) return now;
             }
             if (nativeIsDataInstalled(home().getAbsolutePath())) return null;
+            // Copied from a PC (and no discs chosen): check those instead of installing from discs.
+            if (copied() && picked[1] == null && picked[2] == null && picked[3] == null)
+                return nativeAdopt(home().getAbsolutePath(), new File(packDir(), "expected.txt").getAbsolutePath());
             for (int i = 1; i < 4; i++) {
                 if (picked[i] == null) return "Choose " + LABELS[i] + ".";
             }

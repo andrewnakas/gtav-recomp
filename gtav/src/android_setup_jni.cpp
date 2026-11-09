@@ -85,6 +85,17 @@ JNIEXPORT jstring JNICALL Java_com_gtavrecomp_app_SetupActivity_nativeInstall(
   return env->NewStringUTF(N(error.empty() ? std::wstring(L"The install stopped.") : error).c_str());
 }
 
+// Game files copied from a PC install (USB) instead of the discs. null when they check out.
+JNIEXPORT jstring JNICALL Java_com_gtavrecomp_app_SetupActivity_nativeAdopt(JNIEnv* env, jobject self, jstring home,
+                                                                           jstring expected) {
+  JavaUi ui(env, self);
+  std::wstring error;
+  if (loader::AdoptCopiedData(std::filesystem::path(W(env, home)), std::filesystem::path(W(env, expected)), ui,
+                              &error))
+    return nullptr;
+  return env->NewStringUTF(N(error.empty() ? std::wstring(L"The check stopped.") : error).c_str());
+}
+
 JNIEXPORT jboolean JNICALL Java_com_gtavrecomp_app_SetupActivity_nativeIsDataInstalled(JNIEnv* env, jclass,
                                                                                          jstring home) {
   return loader::IsDataInstalled(std::filesystem::path(W(env, home)));
