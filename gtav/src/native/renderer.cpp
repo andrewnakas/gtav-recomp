@@ -660,7 +660,9 @@ class Renderer {
             int count = 0;
             if (SDL_Window** windows = SDL_GetWindows(&count)) {
               for (int i = 0; i < count; i++) SDL_HideWindow(windows[i]);
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
               if (count > 0) sdk_window_id_ = SDL_GetWindowID(windows[0]);
+#endif
               SDL_free(windows);
             }
           }
@@ -784,7 +786,9 @@ class Renderer {
                     menu::OnEscape();
                 }
                 MenuInput(e);
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
                 ForwardToSdk(e);
+#endif
                 return true;
               },
               nullptr);
