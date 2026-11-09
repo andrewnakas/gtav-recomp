@@ -320,6 +320,18 @@ REX_HOOK_RAW(sub_82CE9CA8) {
               REXLOG_INFO("[controls] debug thread {} at {:08X}:{}", arg, t, words);
             }
           }
+          if (cmd == "scripts") {  // every script thread: id, program hash, state, ip (stuck-script checks)
+            const uint32_t table = Load32(base, 0x83DDD928), count = Load32(base, 0x83DDD928 + 4) >> 16;
+            std::string line;
+            for (uint32_t i = 0; i < count && i < 512; ++i) {
+              const uint32_t t = Load32(base, table + 4 * i);
+              if (!t || !Load32(base, t + 4)) continue;
+              std::string name;  // the thread's script name (+0x68)
+              for (uint32_t o = 0; o < 63 && base[t + 0x68 + o]; ++o) name += char(base[t + 0x68 + o]);
+              line += fmt::format(" {}:{}/{}/{:X}", Load32(base, t + 4), name, Load32(base, t + 12), Load32(base, t + 16));
+            }
+            REXLOG_INFO("[controls] debug scripts (id:name/state/ip):{}", line);
+          }
           if (cmd == "find") {  // "find <hex>": guest addresses holding that big-endian word
             const uint32_t want = uint32_t(std::strtoul(arg.c_str(), nullptr, 16));
             std::vector<uint8_t> chunk(1u << 20);
@@ -435,6 +447,12 @@ REX_HOOK_RAW(sub_82CE9CA8) {
             if (!equipped) REXLOG_INFO("[controls] debug weapon: player has no gun");
           }
 
+          if (cmd == "pos") {  // the player's position (respawn checks: it jumps to a hospital)
+            uint32_t xyz[3];
+            CallVector(ctx, base, sub_82C9ADD8, {ped, 1}, xyz);
+            REXLOG_INFO("[controls] debug pos: {:.1f} {:.1f} {:.1f}", std::bit_cast<float>(xyz[0]),
+                        std::bit_cast<float>(xyz[1]), std::bit_cast<float>(xyz[2]));
+          }
           if (cmd == "car") {  // the nearest vehicle, driver's seat
             uint32_t xyz[3];
             CallVector(ctx, base, sub_82C9ADD8, {ped, 1}, xyz);
