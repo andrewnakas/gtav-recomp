@@ -178,6 +178,12 @@ free during setup.
 5. **Open GTA V**, choose the pack and the three disc files, and press **Install**. It copies and
    checks about 16 GB, then starts. You can delete the disc images and the pack afterwards.
 
+**Short on space?** Copy the game files from your computer instead of the discs (about 16 GB free
+instead of 40): install `GTAV.apk` and open it once, then connect the phone by USB and copy the
+folders `game`, `update` and `user` from your game folder's `data` into the phone's
+`Android/data/com.gtavrecomp.app/files/data/`. In the app, choose only the pack and press
+**Install**: it checks the copied files instead of installing from discs.
+
 **Missing objects?** Copy the phone's `Android/data/com.gtavrecomp.app/files/shader_cache` folder to
 `android/shader_cache` in your game folder, press Build for Android again, and choose the new pack on
 the phone.
