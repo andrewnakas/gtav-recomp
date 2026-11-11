@@ -307,6 +307,14 @@ public class SetupActivity extends Activity {
                 busy = false;
                 refresh();
                 if (error == null) {
+                    // Installed: the discs are not needed again (they may be deleted to save space), so
+                    // forget them like the pack; a later setup then checks copied files instead.
+                    android.content.SharedPreferences.Editor e = prefs.edit();
+                    for (int i = 1; i < 4; i++) {
+                        e.remove("uri" + i);
+                        picked[i] = null;
+                    }
+                    e.apply();
                     startGame();
                 } else {
                     status.setText(cancelled.get() ? "Cancelled. Install again to continue where it stopped." : "Stopped.");
