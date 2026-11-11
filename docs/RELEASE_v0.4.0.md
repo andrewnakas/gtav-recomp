@@ -60,4 +60,10 @@ before publishing.
   --licenses ... --ios <ios> --android dist/v0.4.0/android --tar` needs the Mac's iOS shell, so it
   is finished after step 1.
 
-Linux build log: _(filled in below by the Linux session)_
+Linux build log (2026-11-11): compat container build at d8e21bf **done** (clean rebuild: the
+recreated image's headers invalidated the 11-01 precompiled headers, so the old `*-compat` trees were
+deleted). Floors: glibc 2.35, GLIBCXX_3.4.32 (same as 0.3.0). Clean `ubuntu:24.04` container: the
+launcher and XenosRecomp start; gtav_fast only lacks `gtav_game.so`, which the player's install
+builds. `dist/v0.4.0/android` built (APK versionCode 4 / 0.4.0, shell `ecd8c201...`, the one tested
+on the S23 FE). Left: package with the Mac's iOS shell, unattended install + `--android` from the
+unpacked tarball, `scan_release.sh`.
