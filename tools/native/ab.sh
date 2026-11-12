@@ -6,6 +6,8 @@
 NAME=$1; SETTING=$2; A=$3; B=$4; ROUNDS=${5:-4}; PERIOD=${6:-10}; shift 6 2>/dev/null
 ROOT="$HOME/gtav-linux"
 L="$ROOT/logs/$NAME.log"
+# Command-line settings only, and the menu_set flips must not be saved into gtav_settings.ini.
+export GTAV_IGNORE_SETTINGS=1
 if pgrep -x gtav >/dev/null; then echo "game already running: not starting"; exit 1; fi
 rm -f "$L" "$ROOT/build/gtav/logs/menu_set"
 "$ROOT/play.sh" "$NAME" --gtav_native_fps --gtav_native_stats=true --gtav_native_hidden=true --audio_mute=true "$@" \

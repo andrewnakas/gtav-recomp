@@ -389,22 +389,34 @@ void TestSet(const std::string& name, const std::string& value) {
   REXLOG_INFO("[native] menu test: saved");
 }
 
+// One line with the values the run actually uses (command line + ini), so a log is reproducible.
+static void LogEffectiveSettings(bool ini_ignored) {
+  std::string all;
+  for (const char* name : kSettings) all += fmt::format(" {}={}", name, rex::cvar::GetFlagByName(name));
+  REXLOG_INFO("[native] settings{}:{}", ini_ignored ? " (gtav_settings.ini ignored)" : "", all);
+}
+
 void LoadSettings() {
   // GTAV_IGNORE_SETTINGS=1: command-line settings only (benchmark runs).
-  if (std::getenv("GTAV_IGNORE_SETTINGS")) return;
-  std::ifstream in(SettingsPath());
-  if (!in) return;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.empty() || line[0] == '#') continue;
-    auto eq = line.find('=');
-    if (eq == std::string::npos) continue;
-    std::string name = line.substr(0, eq), value = line.substr(eq + 1);
-    if (std::find_if(std::begin(kSettings), std::end(kSettings), [&](const char* s) { return name == s; }) ==
-        std::end(kSettings))
-      continue;
-    if (rex::cvar::SetFlagByName(name, value)) REXLOG_INFO("[native] setting {} = {} (gtav_settings.ini)", name, value);
+  if (std::getenv("GTAV_IGNORE_SETTINGS")) {
+    LogEffectiveSettings(true);
+    return;
   }
+  std::ifstream in(SettingsPath());
+  if (in) {
+    std::string line;
+    while (std::getline(in, line)) {
+      if (line.empty() || line[0] == '#') continue;
+      auto eq = line.find('=');
+      if (eq == std::string::npos) continue;
+      std::string name = line.substr(0, eq), value = line.substr(eq + 1);
+      if (std::find_if(std::begin(kSettings), std::end(kSettings), [&](const char* s) { return name == s; }) ==
+          std::end(kSettings))
+        continue;
+      if (rex::cvar::SetFlagByName(name, value)) REXLOG_INFO("[native] setting {} = {} (gtav_settings.ini)", name, value);
+    }
+  }
+  LogEffectiveSettings(false);
 }
 
 void SetNotice(const std::string& text, double seconds) {
