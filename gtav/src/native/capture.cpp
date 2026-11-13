@@ -26,6 +26,7 @@
 #include <xxhash.h>
 
 #include "safe_read.h"
+#include "../linux_threads.h"
 #ifndef _WIN32
 #include <unistd.h>
 #if defined(__APPLE__)
@@ -1202,6 +1203,7 @@ void OnCommandBufferRun(uint32_t device, uint32_t write_before, uint32_t write_a
 }
 
 void OnCaptureSwap(uint32_t front_buffer) {
+  linux_threads::Note(linux_threads::kD3D);
   FlushIndexedVertices();
   // Commands recorded this frame into known buffers that did not run yet: they run later.
   for (auto& b : g_buffers) {
@@ -1309,6 +1311,7 @@ void FenceFlush() {
 #endif
 extern "C" GTAV_HOOK_EXPORT uint32_t rex_skip_rendering_fence(uint32_t address, uint32_t value, uint32_t endian) {
   using namespace gtav::native;
+  gtav::linux_threads::Note(gtav::linux_threads::kCommandProcessor);
   uint32_t fence = g_fence_address.load(std::memory_order_relaxed);
   if (!fence || (address & 0x1FFFFFFF) != (fence & 0x1FFFFFFF)) return value;
   std::lock_guard lock(g_fence_mutex);

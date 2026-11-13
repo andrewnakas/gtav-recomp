@@ -70,6 +70,7 @@ set(GTAV_SOURCES
     src/frame_limit.cpp
     src/wait_profile.cpp
     src/gpu_fence_wait.cpp
+    src/linux_threads.cpp
     src/native/stats.cpp
     src/native/capture.cpp
     src/native/d3d_probe.cpp

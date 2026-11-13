@@ -7,6 +7,8 @@
 // the only limit: with the emulated GPU's vblank at 60 Hz (--vsync=true) other waits still
 // tie it to the display, so uncapped play also wants --vsync=false.
 
+#include "linux_threads.h"
+
 #include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/input/mnk/mnk_input_driver.h>
@@ -76,6 +78,7 @@ void ApplyPowerThrottling() {}
 
 REX_EXTERN(__imp__sub_827B5878);
 REX_HOOK_RAW(sub_827B5878) {
+  gtav::linux_threads::Note(gtav::linux_threads::kMain);
   ApplyPowerThrottling();
   int32_t limit = REXCVAR_GET(gtav_fps_limit);
   if (REXCVAR_GET(gtav_vehicle_30fps)) {

@@ -8,6 +8,7 @@
 // skipped renders a few hundred milliseconds later and the result persists for later runs.
 
 #include "shader_compiler.h"
+#include "../linux_threads.h"
 
 #include "paths.h"
 
@@ -114,6 +115,7 @@ bool Run(const std::vector<std::string>& args) {
   return false;
 #else
   std::string cmd = "nice -n 5 ";  // below the game's threads, like BELOW_NORMAL on Windows
+  if (const char* cpus = gtav::linux_threads::BackgroundCpuList(); cpus && *cpus) cmd += std::string("taskset -c ") + cpus + " ";
   for (const auto& a : args) cmd += "'" + a + "' ";
   cmd += ">/dev/null 2>&1";
   return std::system(cmd.c_str()) == 0;
