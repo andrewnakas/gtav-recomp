@@ -2118,6 +2118,7 @@ struct Backend::Impl {
         } push{0, uint32_t(cmd.GetTexID()) ? uint32_t(cmd.GetTexID()) : menu_font_descriptor, blit_sampler,
                {2.0f / w, 2.0f / h}};
         list->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+        draw_state.push_set = false;  // not a game draw: the next DrawImpl pushes its addresses again
         list->drawIndexedInstanced(cmd.ElemCount, 1, cmd.IdxOffset, int32_t(cmd.VtxOffset), 0);
       }
     }
@@ -3292,6 +3293,7 @@ struct Backend::Impl {
     list->setPipeline(pipeline.get());
     const float push[4] = {color.r, color.g, color.b, color.a};
     list->setGraphicsPushConstants(0, push, 0, sizeof(push));
+    draw_state.push_set = false;  // not a game draw: the next DrawImpl pushes its addresses again
     RenderViewport vp(0.0f, 0.0f, float(Sz(t->width, t->scale)), float(Sz(t->height, t->scale)));
     RenderViewport vps[4] = {vp, vp, vp, vp};
     list->setViewports(vps, std::max(n, 1u));
@@ -5025,6 +5027,7 @@ struct Backend::Impl {
                        (words[1] & 0x3F) == 23 ? 1 : 0};
     std::memcpy(&push[4], &one, 4);
     list->setGraphicsPushConstants(0, push, 0, sizeof(push));
+    draw_state.push_set = false;  // not a game draw: the next DrawImpl pushes its addresses again
     list->drawInstanced(3, 1, 0, 0);
     if (dumping && dump_small_readback && dump_small.size() < kSmallSlots) {
       // Centre texels of the packed word, to compare the stencil byte with the emulator's.
@@ -5462,6 +5465,7 @@ struct Backend::Impl {
       uint32_t mode, index;
     } push{int32_t(px) - int32_t(x1), int32_t(py) - int32_t(y1), scale, mode, dst.storage_index};
     list->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+    draw_state.push_set = false;  // not a game draw: the next DrawImpl pushes its addresses again
     RenderViewport vp(float(x1), float(y1), float(x2 - x1), float(y2 - y1));
     RenderRect sc{int32_t(x1), int32_t(y1), int32_t(x2), int32_t(y2)};
     RenderViewport vps[4] = {vp, vp, vp, vp};
@@ -5787,6 +5791,7 @@ struct Backend::Impl {
       int32_t push[6] = {int32_t(src_descriptor), 0, sx1 - spx, sy1 - spy, 0, mode};
       std::memcpy(&push[4], &scale, 4);
       list->setGraphicsPushConstants(0, push, 0, sizeof(push));
+      draw_state.push_set = false;  // not a game draw: the next DrawImpl pushes its addresses again
       list->drawInstanced(3, 1, 0, 0);
     } else if (src->msaa) {
       Transition(list, src->texture.get(), RenderTextureLayout::RESOLVE_SOURCE);
