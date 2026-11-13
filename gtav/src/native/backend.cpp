@@ -3737,6 +3737,8 @@ struct Backend::Impl {
     bool index_bound = false;
     bool bias_set = false;
     float bias[2] = {};  // constant, slope
+    bool push_set = false;
+    uint64_t push[3] = {};  // vs, ps, shared constant addresses
   } draw_state;
   uint32_t bias_logged = 0;
   std::unordered_set<uint64_t> bias_seen;
@@ -3780,6 +3782,18 @@ struct Backend::Impl {
     uint32_t offset = 0;
     bool valid = false;
   } fetch_cache;
+  // Fetch blocks keyed by content: a material drawn again (hundreds of times a frame) gets its
+  // 192 shared-constant words back without the 32-slot loop. Valid for the slot generation only,
+  // like the slot memo: a resolve or a new frame can change what a block's textures are.
+  struct BlockMemo {
+    uint64_t hash = 0;
+    uint32_t generation = 0;
+    std::array<uint32_t, 192> sc{};
+    std::array<uint8_t, 768> block{};
+  };
+  static constexpr uint32_t kBlockMemoSize = 1024;
+  std::vector<BlockMemo> block_memo = std::vector<BlockMemo>(kBlockMemoSize);
+  uint64_t block_memo_hits = 0;
   // Per-slot memo of TextureDescriptor + SamplerDescriptor, keyed by the six fetch words:
   // ~20,000 slot lookups a frame repeat a few hundred fetch constants. Results only change at a
   // resolve or a new frame, which bump the generation.
@@ -3803,6 +3817,14 @@ struct Backend::Impl {
     bool valid = false;
   };
   LastConstants last_vs, last_ps;
+  // The shared block (texture/sampler slots, booleans, alpha threshold) is the same for most
+  // consecutive draws: reuse the previous draw's upload when the 1,792 bytes match (a memcmp is
+  // far cheaper than writing them to write-combined memory again, ~7 MB a frame at 3,600 draws).
+  struct LastShared {
+    alignas(16) uint8_t cpu[kSharedConstantsSize];
+    UploadAllocation gpu{};
+    bool valid = false;
+  } last_shared;
 
   // Only the registers the shader reads (`use`, all when null) are swapped: the rest of the block
   // is undefined.
@@ -4192,6 +4214,19 @@ struct Backend::Impl {
     bool fetch_cached = !dumping && fetch_cache.valid && fetch_cache.offset == d.fetch;
     if (fetch_cached) std::memcpy(sc, fetch_cache.sc.data(), sizeof(fetch_cache.sc));
     tprof.cached_blocks += fetch_cached;
+    BlockMemo* bm = nullptr;
+    if (!fetch_cached && !dumping) {
+      uint64_t h = Hash(fetch, 768);
+      bm = &block_memo[h & (kBlockMemoSize - 1)];
+      if (bm->generation == slot_generation && bm->hash == h && std::memcmp(bm->block.data(), fetch, 768) == 0) {
+        std::memcpy(sc, bm->sc.data(), sizeof(bm->sc));
+        block_memo_hits++;
+        fetch_cached = true;
+        bm = nullptr;
+      } else {
+        bm->hash = h;
+      }
+    }
     auto slots_start = prof.on ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     for (uint32_t slot = 0; slot < 32 && !fetch_cached; slot++) {
       uint32_t words[6];
@@ -4287,10 +4322,15 @@ struct Backend::Impl {
     if (!fetch_cached && prof.on)
       tprof.descriptor_ms +=
           8 * std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slots_start).count();
-    if (!fetch_cached && !dumping) {
+    if (!dumping && (!fetch_cached || bm == nullptr)) {
       std::memcpy(fetch_cache.sc.data(), sc, sizeof(fetch_cache.sc));
       fetch_cache.offset = d.fetch;
       fetch_cache.valid = true;
+    }
+    if (bm) {  // a block memo miss: remember this block's words
+      std::memcpy(bm->sc.data(), sc, sizeof(bm->sc));
+      std::memcpy(bm->block.data(), fetch, 768);
+      bm->generation = slot_generation;
     }
     prof.Mark(prof.fetch);
     const uint8_t* bools = r;  // the shadow starts with the 0x4900 bool constants
@@ -4661,10 +4701,22 @@ struct Backend::Impl {
         ds.bias_set = true;
       }
     }
-    auto shared = upload.Allocate(kSharedConstantsSize);
-    std::memcpy(shared.cpu, shared_cpu, kSharedConstantsSize);
+    UploadAllocation shared;
+    if (last_shared.valid && std::memcmp(last_shared.cpu, shared_cpu, kSharedConstantsSize) == 0) {
+      shared = last_shared.gpu;
+    } else {
+      shared = upload.Allocate(kSharedConstantsSize);
+      std::memcpy(shared.cpu, shared_cpu, kSharedConstantsSize);
+      std::memcpy(last_shared.cpu, shared_cpu, kSharedConstantsSize);
+      last_shared.gpu = shared;
+      last_shared.valid = true;
+    }
     uint64_t push[3] = {vsc.gpu, psc.gpu, shared.gpu};
-    list->setGraphicsPushConstants(0, push, 0, sizeof(push));
+    if (!ds.push_set || std::memcmp(ds.push, push, sizeof(push)) != 0) {
+      list->setGraphicsPushConstants(0, push, 0, sizeof(push));
+      std::memcpy(ds.push, push, sizeof(push));
+      ds.push_set = true;
+    }
 #if GTAV_MOBILE
     if (RenderDescriptorSet* cs = ConstantSet(vsc.buffer, psc.buffer, shared.buffer)) {
       const uint32_t offsets[3] = {uint32_t(vsc.offset), uint32_t(psc.offset), uint32_t(shared.offset)};
@@ -5853,6 +5905,7 @@ RenderTexture* Backend::Execute(const FramePacket& f, RenderCommandList* list, u
   s.tile_alias_done.clear();
   write_watch::Harvest();  // before this frame's texture and buffer lookups
   s.last_vs.valid = s.last_ps.valid = false;  // upload memory is per frame
+  s.last_shared.valid = false;
   s.fetch_cache.valid = false;
   s.slot_generation++;
   s.EvictTextures();
@@ -5970,8 +6023,8 @@ RenderTexture* Backend::Execute(const FramePacket& f, RenderCommandList* list, u
                   "({:.2f} ms), {:.0f} full hashes of {:.1f} MB ({:.2f} ms)",
                   t.lookups / n, t.cached_blocks / n, t.sampled / n, t.sampled_ms / n, t.full / n,
                   t.full_bytes / n / 1048576.0, t.full_ms / n);
-      REXLOG_INFO("[native]   texture ms per frame: slots {:.2f}, {:.0f} slots from the memo",
-                  t.descriptor_ms / n, s.slot_memo_hits / n);
+      REXLOG_INFO("[native]   texture ms per frame: slots {:.2f}, {:.0f} slots from the memo, {:.0f} blocks from the memo",
+                  t.descriptor_ms / n, s.slot_memo_hits / n, s.block_memo_hits / n);
       if (s.prehash_on) {
         REXLOG_INFO("[native]   hashed ahead per frame: {:.0f} used, {:.0f} not ready yet, {:.0f} not listed "
                     "(hashed on the render thread), {:.2f} ms to start",
@@ -5992,6 +6045,7 @@ RenderTexture* Backend::Execute(const FramePacket& f, RenderCommandList* list, u
         s.tstats_watched_buffers = 0;
       }
       s.slot_memo_hits = 0;
+      s.block_memo_hits = 0;
       t = {};
       a = {};
       s.prof_frames = 0;
