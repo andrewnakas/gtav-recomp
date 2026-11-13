@@ -455,7 +455,7 @@ index e90418d..9f5d0f8 100644
  #define REX_PLATFORM_WIN32 0
  #endif
 diff --git a/include/rex/system/xobject.h b/include/rex/system/xobject.h
-index 0a43f07..a9bf21f 100644
+index 0a43f07..ea9bb29 100644
 --- a/include/rex/system/xobject.h
 +++ b/include/rex/system/xobject.h
 @@ -189,6 +189,8 @@ class XObject {
@@ -467,6 +467,18 @@ index 0a43f07..a9bf21f 100644
    X_STATUS Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t alertable,
                  uint64_t* opt_timeout);
    static X_STATUS SignalAndWait(XObject* signal_object, XObject* wait_object, uint32_t wait_reason,
+@@ -222,8 +224,10 @@ class XObject {
+ 
+   // Stash native pointer into X_DISPATCH_HEADER
+   static void StashHandle(X_DISPATCH_HEADER* header, uint32_t handle) {
+-    header->wait_list_flink = kXObjSignature;
++    // Handle first, then the signature: GetNativeObject reads them without the global lock.
+     header->wait_list_blink = handle;
++    std::atomic_thread_fence(std::memory_order_release);
++    header->wait_list_flink = kXObjSignature;
+   }
+ 
+   static uint32_t TimeoutTicksToMs(int64_t timeout_ticks);
 diff --git a/include/rex/thread/fiber.h b/include/rex/thread/fiber.h
 index 352af67..2f6123f 100644
 --- a/include/rex/thread/fiber.h
@@ -4285,7 +4297,7 @@ index 76cc877..c2990df 100644
    }
  
 diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
-index d358f39..145de50 100644
+index d358f39..df420cd 100644
 --- a/src/system/xobject.cpp
 +++ b/src/system/xobject.cpp
 @@ -10,8 +10,15 @@
@@ -4395,6 +4407,41 @@ index d358f39..145de50 100644
      wait_handles[i] = objects[i]->GetWaitHandle();
      assert_not_null(wait_handles[i]);
    }
+@@ -380,21 +454,28 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
+   // We identify this by setting wait_list_flink to a magic value. When set,
+   // wait_list_blink will hold a handle to our object.
+ 
+-  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+-
+   auto header = reinterpret_cast<X_DISPATCH_HEADER*>(native_ptr);
+ 
++  // Already initialized: the common case (every KeSetEvent / KeWaitForSingleObject /
++  // KeReleaseSemaphore). No global lock here: StashHandle publishes the handle before the
++  // signature, and LookupObject takes the object table's lock itself. Taking the global lock
++  // around it made every kernel call lock the (contended) recursive mutex twice.
++  if (header->wait_list_flink == kXObjSignature) {
++    std::atomic_thread_fence(std::memory_order_acquire);
++    uint32_t handle = header->wait_list_blink;
++    return kernel_state->object_table()->LookupObject<XObject>(handle);
++  }
++
++  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
++
+   if (as_type == -1) {
+     as_type = header->type;
+   }
+ 
+   if (header->wait_list_flink == kXObjSignature) {
+-    // Already initialized.
+-    // TODO: assert if the type of the object != as_type
++    // Initialized by another thread while we waited for the lock.
+     uint32_t handle = header->wait_list_blink;
+     auto object = kernel_state->object_table()->LookupObject<XObject>(handle);
+-
+-    // TODO(benvanik): assert nothing has been changed in the struct.
+     return object;
+   } else {
+     // First use, create new.
 diff --git a/src/system/xsemaphore.cpp b/src/system/xsemaphore.cpp
 index db830e4..f053f2a 100644
 --- a/src/system/xsemaphore.cpp
@@ -4407,6 +4454,34 @@ index db830e4..f053f2a 100644
    int32_t previous_count = 0;
    bool success = semaphore_->Release(release_count, &previous_count);
    if (out_previous_count) {
+diff --git a/src/system/xthread.cpp b/src/system/xthread.cpp
+index 77bce25..71f2a4c 100644
+--- a/src/system/xthread.cpp
++++ b/src/system/xthread.cpp
+@@ -470,7 +470,9 @@ X_STATUS XThread::Create() {
+     set_name(fmt::format("XThread{:04X}", thread_->system_id()));
+   }
+ 
+-  if (creation_params_.creation_flags & 0x60) {
++  // Creation-flag priority: honoured only when thread priorities are not ignored (on Linux this
++  // is a SCHED_FIFO request, which would make a game thread real-time under an rtprio limit).
++  if ((creation_params_.creation_flags & 0x60) && !REXCVAR_GET(ignore_thread_priorities)) {
+     thread_->set_priority(creation_params_.creation_flags & 0x20 ? 1 : 0);
+   }
+ 
+@@ -1025,7 +1027,11 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
+     }
+   } else {
+     if (timeout_ms == 0) {
+-      if (priority_ <= rex::thread::ThreadPriority::kBelowNormal) {
++      // Sleep(0): yield. Only threads the guest lowered (negative priority increment) sleep a
++      // little so higher-priority threads get the core. priority_ is the guest increment, so it
++      // must not be compared with the host ThreadPriority constants (kBelowNormal is 8 on POSIX:
++      // every Sleep(0) became a 100 us nanosleep, ~1,500 times a frame on GTA V's update thread).
++      if (priority_ < 0) {
+         rex::thread::Sleep(std::chrono::microseconds(100));
+       } else {
+         rex::thread::MaybeYield();
 diff --git a/src/ui/CMakeLists.txt b/src/ui/CMakeLists.txt
 index 5bd3dc5..adff0de 100644
 --- a/src/ui/CMakeLists.txt
@@ -4729,6 +4804,12 @@ index f102b56..3030ad5 100644
  target_include_directories(imgui PUBLIC
      $<BUILD_INTERFACE:${IMGUI_DIR}>
      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+diff --git a/thirdparty/FFmpeg b/thirdparty/FFmpeg
+--- a/thirdparty/FFmpeg
++++ b/thirdparty/FFmpeg
+@@ -1 +1 @@
+-Subproject commit 0604b464c7cb4ebc94940cf1f324a3b26b87717c
++Subproject commit 0604b464c7cb4ebc94940cf1f324a3b26b87717c-dirty
 diff --git a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
 index 32d427d..23fd3e1 100644
 --- a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
@@ -4785,3 +4866,9 @@ index 0000000..b961317
 +#include "imgui_rex_config.h"
 +
 +thread_local ImGuiContext* RexImGuiContextTLS = nullptr;
+diff --git a/thirdparty/sdl3 b/thirdparty/sdl3
+--- a/thirdparty/sdl3
++++ b/thirdparty/sdl3
+@@ -1 +1 @@
+-Subproject commit 8bf3b7215ad9fc3deb583c6a3a37c6c67f2e24e4
++Subproject commit 8bf3b7215ad9fc3deb583c6a3a37c6c67f2e24e4-dirty
