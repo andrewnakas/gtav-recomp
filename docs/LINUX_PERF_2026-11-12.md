@@ -3,17 +3,26 @@
 Machine: i5-13420H (4P+4E), RTX 4050 Laptop, 32 GB, game data on the TOSHIBA USB disk.
 Goal: 100+ fps uncapped (10-29 target), fewer hitches. Scope: the whole Linux build.
 
-## Status: code in, numbers not yet
-No bench reached the open world today. Other Claude sessions ran four `bfs` scans of the
-whole filesystem (the exFAT game disk included) for hours, the machine sat at load 25-35 with
-4 GB of swap full, and the last A/B run was killed by Claude Code's low-memory reaper. Boots
-that take 4 s to frame 150 on a quiet machine took 85-330 s and then crawled at 10-30 s per
-frame in the loading screens ("long wait (>15s)" loader threads). Page-cache warm-ups of the
-game files (`cat` of disc2_files + update, 504 s; title storage, 429 s) were evicted again
-within minutes.
+## Status (11-13 12:30): boot bug found and fixed, in-world numbers still pending
+The loading-screen crawl that blocked every bench (0.2-1 fps, 1-5 s guest frames, "long wait
+(>15s)" loader threads, CPU and disk mostly idle) was a runtime bug, not only the busy machine:
+`HostPathDevice::ResolvePath` listed the whole host directory (opendir + readdir + stat per
+child) on every probe for a file that does not exist, under the VFS global lock. GTA V probes
+`game:\xbox360` ~10x/s while loading; on the exFAT USB disk each listing is 20-200 ms inside
+`exfat_iterate` (gdb + `/proc/<tid>/wchan` sampling: Main XThread 80% there, every other guest
+thread queued on the global mutex). Fixed in 90484b8 (listing cached per directory while its
+write time is unchanged). First hidden boot with the fix reached the open world in 154 s on a
+loaded machine (load 29); 11-08 logs on a quiet machine show 12 s, so the rest is load and the
+disk. Other sessions' GPU renders (Blender, all night) and `bfs` scans of the game disk made it
+worse but were not the cause.
 
-**Every change below is built into `build/gtav` (game binary 18:47, runtime libs `fix2`) but
-unmeasured. Run the queue in "Measurement queue" on a quiet machine before trusting any of it.**
+Also seen: the hidden SDK window is still painted once per guest swap (presenter →
+`WindowSDL::RequestPaint`, Vulkan present through the NVIDIA driver, ~500/s in the 400-fps logo
+phase, 18% of a core on the main host thread); harmless in the world at 30-60 fps, so left alone.
+
+**Everything below is built (`build/gtav`: pre-change game binary from e0999ca, runtime libs
+`logs/libs_dircache` = Sleep fix + lock fast path + listing cache) but the perf commits are still
+unmeasured: the machine has not been quiet (load 9-30, other sessions' rustc/rm/Blender).**
 
 ## Findings (verified in code)
 1. **Benches were refresh-capped.** `gtav_settings.ini` (`gtav_native_vsync=true`) loads after
@@ -45,9 +54,14 @@ unmeasured. Run the queue in "Measurement queue" on a quiet machine before trust
 | 29cb2e4 | cache byte totals, desktop buffer budget 512 MB, pipeline-cache get off the render thread | hitches ≥25 ms in `bench_stats.py` over a 5-min run-around |
 | 8a47b12 | shared-constant reuse, push-constant skip, fetch-block memo | `bin_ab_linux.sh` old vs new binary; textures/consts ms vs `logs/walk2.log` (2.2 / 0.9 ms); screenshots for texture mix-ups |
 | a99a0cd | `BENCH_BOOT_SECS` | — |
+| e0855db | fix: `push_set` reset after the non-draw push-constant writes (self-review of 8a47b12) | — |
+| c857388, 0bbd86d, cd11af6 | `quiet_gate.sh` (load, GPU, disk), `gpu_watch.sh` | — |
+| 90484b8 | SDK: host directory listing cached for missing-file probes (boot crawl); SDK build options `REX_LARGE_CODE_MODEL`/`REX_SYMBOLIC_RUNTIME` (defaults unchanged) | boot-to-world time: `grep -m1 -E 'frame [0-9]+: [0-9]{3,} draws'` vs log start; 11-08 = 12 s |
 
 Runtime library sets saved for A/B: `logs/libs_base` (stock), `logs/libs_sleepfix` (Sleep fix
-only), `logs/libs_fix2` (Sleep fix + lock fast path, currently in `build/gtav`).
+only), `logs/libs_fix2` (Sleep fix + lock fast path), `logs/libs_dircache` (fix2 + listing cache, currently
+in `build/gtav`; the boot fix is needed to reach the world at all, so A/B the Sleep fix as
+`libs_base`+listing cache vs `libs_dircache` if a separate build is wanted).
 
 ## Measurement queue (quiet machine: no `bfs`, load < 4, swap free)
 1. `BENCH_BOOT_SECS=900 tools/native/ab.sh pin0 gtav_linux_pin false true 4 15` (pinning).
