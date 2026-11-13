@@ -3,6 +3,9 @@
 # A bench whose file shows another compute process (e.g. a Blender render) is not trustworthy:
 # the guest stalls on GPU fences. usage: gpu_watch.sh NAME (exits when no gtav process is left)
 L="$HOME/gtav-linux/logs/$1_gpu.txt"; : >"$L"
+# The bench may sit in memgate's slot/RAM queue for a long time before the game starts: wait for
+# the process (up to 2 h) instead of exiting with an empty file.
+w=0; until pgrep -x gtav >/dev/null; do sleep 5; w=$((w+5)); [ $w -ge 7200 ] && { echo "gpu watch: no game within 2 h"; exit 1; }; done
 sleep 5
 while pgrep -x gtav >/dev/null; do
   u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null)

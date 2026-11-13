@@ -17,12 +17,20 @@ rm -f "$L" "$GO"
   --input_script="$GO" "$@" >"$ROOT/logs/$NAME.stdout" 2>&1 &
 PID=$!
 S=$(date +%s)
+# Boot time counts only while the game disk (BENCH_DISK, default sdb) is not saturated by another
+# process: a busy USB disk turns a 37 s boot into 10+ minutes of loading screens (11-13), and that
+# should not burn the whole timeout. Hard cap at 3x BENCH_BOOT_SECS regardless.
+DISK=${BENCH_DISK:-sdb}; waited=0; busy_s=0
+dticks() { awk -v d="$DISK" '$3 == d { print $13 }' /proc/diskstats; }
+t0=$(dticks)
 until grep -qE '\[native\] frame [0-9]+: [0-9]{3,} draws' "$L" 2>/dev/null; do
   sleep 5
   if ! kill -0 $PID 2>/dev/null; then echo "game exited before reaching the world"; exit 3; fi
-  if [ $(( $(date +%s) - S )) -gt "${BENCH_BOOT_SECS:-420}" ]; then echo "no in-game frame after ${BENCH_BOOT_SECS:-420} s (boot hang?)"; kill -9 $PID; exit 2; fi
+  t1=$(dticks); if [ -n "$t1" ] && [ $(( (t1 - t0) / 50 )) -gt 40 ]; then busy_s=$((busy_s + 5)); else waited=$((waited + 5)); fi; t0=$t1
+  if [ "$waited" -gt "${BENCH_BOOT_SECS:-420}" ] || [ $(( $(date +%s) - S )) -gt $(( 3 * ${BENCH_BOOT_SECS:-420} )) ]; then
+    echo "no in-game frame after $(( $(date +%s) - S )) s (boot hang? disk busy for ${busy_s} s of it)"; kill -9 $PID; exit 2; fi
 done
-echo "in game after $(( $(date +%s) - S )) s"
+echo "in game after $(( $(date +%s) - S )) s (disk busy for ${busy_s} s of it)"
 sleep 10
 # BENCH_INPUT=none: stand still at the spawn point (steadier scenes for A/B runs).
 [ "${BENCH_INPUT:-run}" = none ] || cp "$ROOT/tools/native/input_run_around.txt" "$GO"
