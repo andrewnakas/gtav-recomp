@@ -17,7 +17,7 @@ S=$(date +%s)
 until grep -qE '\[native\] frame [0-9]+: [0-9]{3,} draws' "$L" 2>/dev/null; do
   sleep 5
   if ! kill -0 $PID 2>/dev/null; then echo "game exited before reaching the world"; exit 3; fi
-  if [ $(( $(date +%s) - S )) -gt 420 ]; then echo "no in-game frame after 420 s"; kill -9 $PID; exit 2; fi
+  if [ $(( $(date +%s) - S )) -gt "${BENCH_BOOT_SECS:-420}" ]; then echo "no in-game frame after ${BENCH_BOOT_SECS:-420} s"; kill -9 $PID; exit 2; fi
 done
 sleep 15
 MARKS="$ROOT/logs/${NAME}_marks.txt"; : >"$MARKS"
