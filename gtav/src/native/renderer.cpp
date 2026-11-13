@@ -1,6 +1,7 @@
 // gtav - native renderer: render thread, Plume device and the shadow window.
 
 #include "renderer.h"
+#include "../linux_threads.h"
 
 #include "backend.h"
 #include "deferred_list.h"
@@ -946,14 +947,19 @@ class Renderer {
     if (!pipelines_since_save_ || now - last_cache_save_ < std::chrono::seconds(20)) return;
     last_cache_save_ = now;
     pipelines_since_save_ = 0;
-    auto get_start = std::chrono::steady_clock::now();
-    std::vector<uint8_t> data = plume::GetVulkanPipelineCacheData(device_.get());
-    double get_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - get_start).count();
-    if (data.empty()) return;
-    // The file is written by a background thread: ~33 MB on the busy E: disk took ~2 s, a freeze
-    // every 20 s while the renderer (and so the guest, through the swap wait) waited for it.
+    // Both the get (vkGetPipelineCacheData copies the whole cache: ~9 ms for 17 MB, a render-thread
+    // stall every 20 s while new pipelines appear) and the write (~33 MB on the busy E: disk took
+    // ~2 s) run on a background thread. The pipeline cache is internally synchronized: the compile
+    // workers already create pipelines against it from several threads at once.
     if (cache_writing_.exchange(true)) return;  // the previous save is still being written
-    std::thread([this, data = std::move(data), get_ms] {
+    std::thread([this] {
+      auto get_start = std::chrono::steady_clock::now();
+      std::vector<uint8_t> data = plume::GetVulkanPipelineCacheData(device_.get());
+      double get_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - get_start).count();
+      if (data.empty()) {
+        cache_writing_ = false;
+        return;
+      }
       auto start = std::chrono::steady_clock::now();
       std::error_code ec;
       std::filesystem::create_directories(PipelineCachePath().parent_path(), ec);
@@ -1664,6 +1670,7 @@ class Renderer {
 
   void ThreadMain() {
     PinToBigCores();
+    linux_threads::Note(linux_threads::kRender);
 #if defined(__APPLE__)
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);  // keep it on the performance cores
 #endif

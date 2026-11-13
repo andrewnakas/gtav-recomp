@@ -148,7 +148,9 @@ REXCVAR_DEFINE_INT32(gtav_native_texture_budget_mb, 1024, "GTAV",
 #define GTAV_BUFFER_BUDGET_DEFAULT 96
 #define GTAV_LOW_MEMORY_DEFAULT 600
 #else
-#define GTAV_BUFFER_BUDGET_DEFAULT 0
+// Desktop: 169,000 cached buffers after an hour of driving (most of them stale); 512 MB keeps the map
+// bounded. Idle buffers (2 s unused) are re-converted on their next use.
+#define GTAV_BUFFER_BUDGET_DEFAULT 512
 #define GTAV_LOW_MEMORY_DEFAULT 0
 #endif
 REXCVAR_DEFINE_INT32(gtav_native_buffer_budget_mb, GTAV_BUFFER_BUDGET_DEFAULT, "GTAV",
@@ -1714,6 +1716,10 @@ struct Backend::Impl {
     return it == resolved_latest.end() ? nullptr : &resolved[it->second];
   }
   std::unordered_map<uint64_t, CachedTexture> textures;
+  // Running byte totals of `textures` (t.bytes) and `buffers` (b.size): the budget check used to walk
+  // both maps every 60 frames (169,000 buffers after an hour of driving = a periodic hitch).
+  // Re-summed every 600 frames in case an update path was missed.
+  uint64_t texture_bytes_total = 0, buffer_bytes_total = 0;
   std::unordered_map<uint64_t, uint32_t> samplers;  // desc hash -> descriptor index
   std::vector<std::unique_ptr<RenderSampler>> sampler_objects;
   // Erased only by the buffer budget (EvictTexturesOverBudget), which then clears buffer_memo.
@@ -2302,11 +2308,17 @@ struct Backend::Impl {
     const uint64_t min_idle = low_memory ? 30 : 120;
     uint64_t budget = uint64_t(std::max(64, REXCVAR_GET(gtav_native_texture_budget_mb))) << 20;
     if (low_memory) budget /= 2;
-    uint64_t total = 0;
-    for (const auto& [key, t] : textures)
-      if (t.texture) total += t.bytes;
-    uint64_t buffer_bytes = 0;
-    for (const auto& [key, b] : buffers) buffer_bytes += b.buffer ? b.size : 0;
+    if (frame % 600 == 0) {  // resync the running totals (and report drift once)
+      uint64_t tt = 0, bb = 0;
+      for (const auto& [key, t] : textures) tt += t.bytes;
+      for (const auto& [key, b] : buffers) bb += b.size;
+      if ((tt != texture_bytes_total || bb != buffer_bytes_total) && total_drift_logs++ < 5)
+        REXLOG_WARN("[native] cache totals drifted: textures {} vs {} MB, buffers {} vs {} MB",
+                    texture_bytes_total >> 20, tt >> 20, buffer_bytes_total >> 20, bb >> 20);
+      texture_bytes_total = tt, buffer_bytes_total = bb;
+    }
+    uint64_t total = texture_bytes_total;
+    uint64_t buffer_bytes = buffer_bytes_total;
     // Buffers: released entries are erased (169,000 empty ones after an hour of driving) and the
     // memo in front of the map forgets them; the next use converts the guest data again.
     if (uint64_t bbudget = uint64_t(std::max(0, REXCVAR_GET(gtav_native_buffer_budget_mb))) << 20;
@@ -2327,6 +2339,7 @@ struct Backend::Impl {
           dead_buffers.push_back(std::move(it->second.buffer));  // an in-flight frame may read it
           released++;
         }
+        buffer_bytes_total -= it->second.size;
         buffers.erase(it);
       }
       buffer_memo.fill({});
@@ -2360,6 +2373,7 @@ struct Backend::Impl {
       if (t.texture) freed_bytes += t.bytes;
       if (t.view) dead_views.push_back(std::move(t.view));
       if (t.texture) dead_textures.push_back(std::move(t.texture));
+      texture_bytes_total -= t.bytes;
       textures.erase(it);
       released++;
     }
@@ -2368,7 +2382,7 @@ struct Backend::Impl {
       REXLOG_INFO("[native] texture budget: released {} textures ({:.0f} MB), {} cached ({:.0f} MB)", released,
                   freed_bytes / 1048576.0, textures.size(), (total - freed_bytes) / 1048576.0);
   }
-  uint32_t budget_logs = 0, buffer_budget_logs = 0, low_memory_logs = 0;
+  uint32_t budget_logs = 0, buffer_budget_logs = 0, low_memory_logs = 0, total_drift_logs = 0;
 
   void EvictTextures() {
     EvictTexturesOverBudget();
@@ -2390,6 +2404,7 @@ struct Backend::Impl {
       }
       if (t.view) dead_views.push_back(std::move(t.view));
       if (t.texture) dead_textures.push_back(std::move(t.texture));
+      texture_bytes_total -= t.bytes;
       textures.erase(it);
       released++;
     }
@@ -2948,6 +2963,7 @@ struct Backend::Impl {
       conv_bytes[3] += host_size;
       conv_draws[3]++;
       b.content = content;
+      buffer_bytes_total += host_size - b.size;
       b.size = host_size;
     }
     b.checked_frame = frame;
@@ -3061,6 +3077,7 @@ struct Backend::Impl {
     uint64_t content = Hash(dec.data.data(), std::min<size_t>(dec.data.size(), 1 << 20));
     t.checked_frame = frame;
     t.raw_hash = raw;
+    texture_bytes_total += dec.data.size() - t.bytes;
     t.bytes = dec.data.size();
     if (t.texture && t.content == content) return t.descriptor;
     t.content = content;
