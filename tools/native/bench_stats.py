@@ -28,6 +28,16 @@ lines = open(log, errors='replace').read().splitlines()
 start = 0
 for i, l in enumerate(lines):
     if 'input_script' in l and ('reload' in l or 'loaded' in l): start = i
+if start == 0:
+    # No input script (BENCH_INPUT=none): start 15 fps lines after the first in-world frame, so the
+    # 400-fps loading screens do not inflate the mean (they did: 159 fps "mean" for a 106 fps run).
+    world = next((i for i, l in enumerate(lines) if re.search(r'\[native\] frame \d+: \d{3,} draws', l)), None)
+    if world is not None:
+        n = 0
+        for i in range(world, len(lines)):
+            if fps_re.search(lines[i]):
+                n += 1
+                if n == 15: start = i; break
 fps, p99, p95, mx, draws, rec, pres, gpu, idle, passes, hitches = [], [], [], [], [], [], [], [], [], [], []
 for l in lines[start:]:
     m = fps_re.search(l)

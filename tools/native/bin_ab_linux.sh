@@ -3,7 +3,7 @@
 # Two-binary A/B of the SDK runtime on Linux: alternates the game binaries BIN_A and BIN_B (paths
 # copied over build/gtav/gtav while the game is NOT running), runs
 # bench.sh for each (same input script, same length), and prints one bench_stats line per run plus
-# the per-side means. Interleaved A B A B ... so drift (thermal, other jobs) hits both sides.
+# the per-side means. Interleaved A B, B A, A B ... so drift (thermal, other jobs) hits both sides.
 # BENCH_INPUT=none for standing still. The original .so files are restored at the end.
 N=$1; A=$2; B=$3; ROUNDS=${4:-3}; SECS=${5:-60}; [ $# -ge 5 ] && shift 5 || shift $#
 ROOT="$HOME/gtav-linux"; G="$ROOT/build/gtav"; LIBS="gtav"
@@ -12,7 +12,10 @@ for d in "$A" "$B"; do [ -f "$d" ] || { echo "missing $d"; exit 1; }; done
 SAVE=$(mktemp -d "$ROOT/logs/bin_ab_save.XXXX"); for l in $LIBS; do cp -p "$G/$l" "$SAVE/"; done
 i=0
 while [ $i -lt "$ROUNDS" ]; do
-  for side in A B; do
+  # A B, then B A: a drift that runs one way (load from other sessions, thermal) no longer favours
+  # the side that always runs first.
+  order="A B"; [ $((i % 2)) = 1 ] && order="B A"
+  for side in $order; do
     [ $side = A ] && d=$A || d=$B
     run="${N}_${side}${i}"
     pgrep -x gtav >/dev/null && { echo "game still running before $run"; break 2; }
