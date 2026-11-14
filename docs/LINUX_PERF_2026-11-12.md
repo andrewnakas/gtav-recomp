@@ -24,6 +24,19 @@ phase, 18% of a core on the main host thread); harmless in the world at 30-60 fp
 `logs/libs_dircache` = Sleep fix + lock fast path + listing cache) but the perf commits are still
 unmeasured: the machine has not been quiet (load 9-30, other sessions' rustc/rm/Blender).**
 
+## Results so far (quiet windows of 11-13/14, hidden, muted, standing at the spawn point)
+| Run | Result |
+|---|---|
+| `still_dc0` 15:26 (pre-change binary, libs_dircache, load 4.6) | 73.5 fps mean, 1% low 51, record 4.1 ms, GPU 1.9 ms, boot to world 37 s (cold cache) |
+| `bin_*` 20:52-21:03 binary A/B base vs branch, 3 rounds, A always first | A 103.8/96.9/87.1 fps at ~2000 draws, B 91.7/81.9/76.3 at ~2470 draws. **Inconclusive**: the B scenes had 20% more guest draws (CP `drawidx`), load from other sessions rose 5 → 20 during the six runs, and the CP never waited on the renderer (0-8 of 600 swaps), so the renderer commits cannot move fps either way. Tooling fixed afterwards (ea445c6: A B / B A order, stats window starts in the world). |
+| `pin2` 02:05 in-run flips, 4 rounds x 15 s, load 4.6 | pin=false 107.7 fps (2137 draws) vs pin=true 95.3 (2588 draws); at matched draws the two are within 3-5% (false 108.4@2044 vs true 103.0@2188; false 101.3@2535 vs true 101.9@2580). **No win from `--gtav_linux_pin` on this machine with other load on the P-cores; stays default off.** |
+
+What the numbers say: fps tracks the guest draw count almost linearly (130 fps at 1,430 draws,
+78 fps at 3,260), the Main XThread is at 90-95% of a core in every run, the render thread records
+4-9 ms of a 9-13 ms frame, the GPU 2-4 ms. The limiter is the recompiled game code on the main
+thread. Scene drift between (and within) runs is ±20% in draws, so separate-run A/Bs need matched
+draw counts or many ABBA rounds; in-run cvar flips are the trustworthy tool.
+
 ## Findings (verified in code)
 1. **Benches were refresh-capped.** `gtav_settings.ini` (`gtav_native_vsync=true`) loads after
    the command line (`renderer.cpp` LoadSettings), so `--gtav_native_vsync=false` was overridden
