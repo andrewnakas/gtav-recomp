@@ -177,7 +177,6 @@ def main():
         (BUILD / "gtav_fast", "gtav_fast", True),
         (sdk_install / "lib" / "librexruntime.dylib", "librexruntime.dylib", True),
         (sdk_install / "lib" / "librexgpu-xenos.dylib", "librexgpu-xenos.dylib", True),
-        (sdk_install / "lib" / "libTracyClient.dylib", "libTracyClient.dylib", True),
         (sdk_install / "bin" / "rexglue", "rexglue", True),  # rpath @loader_path: librexruntime
         (sdk_install / "lib" / "libvulkan.1.dylib", "vulkan/lib/libvulkan.1.dylib", True),
         (sdk_install / "lib" / "libMoltenVK.dylib", "vulkan/lib/libMoltenVK.dylib", True),
@@ -202,6 +201,11 @@ def main():
         (REPO / "gtav" / "gtav_manifest.toml", "tools/game_dll/gtav_manifest.toml", False),
         (REPO / "tools" / "game_dll" / "codegen.partition.json", "tools/game_dll/codegen.partition.json", False),
     ]
+    # Tracy is off in release SDK builds since #18 (antivirus flagged the Windows DLL); ship it only
+    # when the SDK was built with it, as gtav_fast then links it.
+    tracy = sdk_install / "lib" / "libTracyClient.dylib"
+    if tracy.is_file():
+        files.append((tracy, "libTracyClient.dylib", True))
     for src, rel, exe in files:
         copy(src, pkg / rel, exe)
     copy(Path(a.expected), pkg / "tools/game_dll/expected.txt")
@@ -211,8 +215,8 @@ def main():
     thin(pkg / "tools/shaders/lib/libdxcompiler.dylib")
     # libvulkan finds MoltenVK through the ICD manifest next to it (as in the dev build tree).
     subprocess.run(["strip", "-S", "-x"] + [str(pkg / f) for f in
-                    ("gtav_fast", "librexruntime.dylib", "librexgpu-xenos.dylib", "libTracyClient.dylib",
-                     "rexglue", "tools/shaders/XenosRecomp")], check=True, capture_output=True)
+                    ("gtav_fast", "librexruntime.dylib", "librexgpu-xenos.dylib", "rexglue",
+                     "tools/shaders/XenosRecomp") + (("libTracyClient.dylib",) if tracy.is_file() else ())], check=True, capture_output=True)
 
     ios_dir = None
     if a.ios_shell:  # tools/ios/make_shell.sh output: the iPhone step's inputs (install.cpp RunIphone)
