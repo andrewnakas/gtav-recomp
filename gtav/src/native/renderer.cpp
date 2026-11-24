@@ -765,7 +765,13 @@ class Renderer {
                 if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat)
                   esc_was_menu_ = menu::IsOpen() || !MnkMode();
 #endif
-                if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {
+                // ForwardToSdk re-pushes the native window's keys to the SDK's window and this watch
+                // sees that copy too: handle the hotkeys once, or the toggles flip back in the same
+                // frame (Alt+Enter / F11 never changed fullscreen on Linux and macOS).
+                const bool forwarded_copy = sdk_window_id_ && native_window_id_ &&
+                                            (e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) &&
+                                            e->key.windowID == sdk_window_id_;
+                if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && !forwarded_copy) {
                   if (e->key.scancode == SDL_SCANCODE_F8) key_replay_ = true;
                   if (e->key.scancode == SDL_SCANCODE_F9 || e->key.scancode == SDL_SCANCODE_N) key_dump_ = true;
                   // M as well: no fn key needed on Mac laptops, and no pad button uses it (mnk_mode).
