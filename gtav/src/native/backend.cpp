@@ -1714,7 +1714,8 @@ struct Backend::Impl {
     return it == resolved_latest.end() ? nullptr : &resolved[it->second];
   }
   std::unordered_map<uint64_t, CachedTexture> textures;
-  std::unordered_map<uint64_t, uint32_t> samplers;  // desc hash -> descriptor index
+  using SamplerKey = std::array<uint32_t, 15>;
+  std::map<SamplerKey, uint32_t> samplers;
   std::vector<std::unique_ptr<RenderSampler>> sampler_objects;
   // Erased only by the buffer budget (EvictTexturesOverBudget), which then clears buffer_memo.
   std::unordered_map<uint64_t, CachedBuffer> buffers;
@@ -2683,14 +2684,30 @@ struct Backend::Impl {
   }
 
   uint32_t Sampler(const RenderSamplerDesc& desc) {
-    uint64_t h = Hash(&desc, sizeof(desc));
-    auto it = samplers.find(h);
+    const SamplerKey key = {
+        uint32_t(desc.minFilter),
+        uint32_t(desc.magFilter),
+        uint32_t(desc.mipmapMode),
+        uint32_t(desc.addressU),
+        uint32_t(desc.addressV),
+        uint32_t(desc.addressW),
+        std::bit_cast<uint32_t>(desc.mipLODBias),
+        uint32_t(desc.maxAnisotropy),
+        uint32_t(desc.anisotropyEnabled),
+        uint32_t(desc.comparisonFunc),
+        uint32_t(desc.comparisonEnabled),
+        uint32_t(desc.borderColor),
+        std::bit_cast<uint32_t>(desc.minLOD),
+        std::bit_cast<uint32_t>(desc.maxLOD),
+        uint32_t(desc.shaderVisibility)
+    };
+    auto it = samplers.find(key);
     if (it != samplers.end()) return it->second;
     uint32_t index = uint32_t(sampler_objects.size());
     if (index >= kSamplerDescriptors) return 0;
     sampler_objects.push_back(device->createSampler(desc));
     sampler_set->setSampler(index, sampler_objects.back().get());
-    samplers[h] = index;
+    samplers[key] = index;
     return index;
   }
 
