@@ -70,6 +70,11 @@
 REXCVAR_DECLARE(std::string, gtav_native_spirv_dir);
 REXCVAR_DECLARE(bool, gtav_native_compile);
 REXCVAR_DECLARE(bool, gtav_native_flicker_catch);
+REXCVAR_DEFINE_BOOL(gtav_native_strict_dxt1_resolve, true, "GTAV",
+                    "Reject incompatible resolved textures for DXT1 fetches");
+REXCVAR_DEFINE_BOOL(gtav_native_bc1_resolve, true, "GTAV",
+                    "Experimental raw RGBA16 resolve to BC1 block reinterpretation (desktop Linux)");
+
 REXCVAR_DEFINE_INT32(gtav_native_dump_rt, 0x2D0, "GTAV",
                      "Frame dumps: EDRAM base of the color target snapshotted after every draw (0x2D0 = scene HDR)");
 REXCVAR_DEFINE_INT32(gtav_native_dump_rt_skip, 0, "GTAV",
@@ -147,6 +152,9 @@ REXCVAR_DEFINE_INT32(gtav_native_texture_budget_mb, 1024, "GTAV",
 #if GTAV_MOBILE
 #define GTAV_BUFFER_BUDGET_DEFAULT 96
 #define GTAV_LOW_MEMORY_DEFAULT 600
+#elif defined(__linux__) && !defined(__ANDROID__)
+#define GTAV_BUFFER_BUDGET_DEFAULT 512
+#define GTAV_LOW_MEMORY_DEFAULT 0
 #else
 #define GTAV_BUFFER_BUDGET_DEFAULT 0
 #define GTAV_LOW_MEMORY_DEFAULT 0
@@ -1392,6 +1400,13 @@ struct ResolvedTexture {
   uint32_t fetch_words[6] = {};  // destination fetch constant of the last resolve
   std::unique_ptr<RenderTextureView> cube_view;
   uint32_t cube_descriptor = 0;
+
+
+  std::unique_ptr<RenderBuffer> bc1_buffer;
+  std::unique_ptr<RenderTexture> bc1_texture;
+  std::unique_ptr<RenderTextureView> bc1_view;
+  uint32_t bc1_descriptor = 0;
+  uint64_t bc1_serial = 0, bc1_dump_frame = ~0ull;
   std::unordered_map<uint32_t, std::pair<std::unique_ptr<RenderTextureView>, std::unique_ptr<RenderFramebuffer>>>
       subresource_targets;  // key: face << 8 | level
 };
@@ -1714,7 +1729,8 @@ struct Backend::Impl {
     return it == resolved_latest.end() ? nullptr : &resolved[it->second];
   }
   std::unordered_map<uint64_t, CachedTexture> textures;
-  std::unordered_map<uint64_t, uint32_t> samplers;  // desc hash -> descriptor index
+  using SamplerKey = std::array<uint32_t, 15>;
+  std::map<SamplerKey, uint32_t> samplers;
   std::vector<std::unique_ptr<RenderSampler>> sampler_objects;
   // Erased only by the buffer budget (EvictTexturesOverBudget), which then clears buffer_memo.
   std::unordered_map<uint64_t, CachedBuffer> buffers;
@@ -2683,14 +2699,30 @@ struct Backend::Impl {
   }
 
   uint32_t Sampler(const RenderSamplerDesc& desc) {
-    uint64_t h = Hash(&desc, sizeof(desc));
-    auto it = samplers.find(h);
+    const SamplerKey key = {
+        uint32_t(desc.minFilter),
+        uint32_t(desc.magFilter),
+        uint32_t(desc.mipmapMode),
+        uint32_t(desc.addressU),
+        uint32_t(desc.addressV),
+        uint32_t(desc.addressW),
+        std::bit_cast<uint32_t>(desc.mipLODBias),
+        uint32_t(desc.maxAnisotropy),
+        uint32_t(desc.anisotropyEnabled),
+        uint32_t(desc.comparisonFunc),
+        uint32_t(desc.comparisonEnabled),
+        uint32_t(desc.borderColor),
+        std::bit_cast<uint32_t>(desc.minLOD),
+        std::bit_cast<uint32_t>(desc.maxLOD),
+        uint32_t(desc.shaderVisibility)
+    };
+    auto it = samplers.find(key);
     if (it != samplers.end()) return it->second;
     uint32_t index = uint32_t(sampler_objects.size());
     if (index >= kSamplerDescriptors) return 0;
     sampler_objects.push_back(device->createSampler(desc));
     sampler_set->setSampler(index, sampler_objects.back().get());
-    samplers[h] = index;
+    samplers[key] = index;
     return index;
   }
 
@@ -2954,6 +2986,89 @@ struct Backend::Impl {
     return b.buffer.get();
   }
 
+  uint32_t bc1_alias_count = 0, bc1_logged = 0;
+
+
+
+
+  uint32_t TryBC1Resolve(RenderCommandList* list, uint32_t address, ResolvedTexture& r,
+                         const uint32_t words[6]) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (!r.texture || r.descriptor < kFirstTextureDescriptor || r.depth_copy ||
+        r.format != RenderFormat::R16G16B16A16_SNORM ||
+        (r.fetch_words[1] & 0x3F) != 26 || r.width != 16 || r.height != 16 ||
+        r.scale != 1.0f || r.layers != 1 || r.mips != 1 ||
+        ((words[5] >> 9) & 3) != 1 || (words[1] & 0x3F) != 18 ||
+        (words[2] & 0x1FFF) != 63 || ((words[2] >> 13) & 0x1FFF) != 63 ||
+        ((words[3] >> 1) & 0xFFF) != 0x688 || ((words[4] >> 6) & 15) != 0)
+      return 0;
+
+
+
+    if (dumping && r.bc1_dump_frame != frame && dump_infos.size() < DumpSlots()) {
+      r.bc1_dump_frame = frame;
+      dump_log += fmt::format("bc1 candidate {:08X} serial {} src {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} "
+                              "dst {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}\n",
+                              address, r.serial, r.fetch_words[0], r.fetch_words[1], r.fetch_words[2],
+                              r.fetch_words[3], r.fetch_words[4], r.fetch_words[5],
+                              words[0], words[1], words[2], words[3], words[4], words[5]);
+      DumpResolve(list, r, address, 0xBC1000u, r.fetch_words);
+    }
+    if (!REXCVAR_GET(gtav_native_bc1_resolve)) return 0;
+    if (r.bc1_texture && r.bc1_serial == r.serial) return r.bc1_descriptor;
+
+
+
+    constexpr uint32_t kSourceRow = 64, kBC1Row = kSourceRow * 4;
+    constexpr uint64_t kBytes = uint64_t(kSourceRow) * 16 * 8;
+    if (!r.bc1_texture) {
+
+      if (bc1_alias_count >= 64) return 0;
+      auto buffer = device->createBuffer(RenderBufferDesc::DefaultBuffer(
+          kBytes, RenderBufferFlag::STORAGE | RenderBufferFlag::UNORDERED_ACCESS |
+                      RenderBufferFlag::DEVICE_ADDRESSABLE));
+      auto texture = device->createTexture(RenderTextureDesc::Texture2D(64, 64, 1, RenderFormat::BC1_UNORM));
+      if (!buffer || !texture) return 0;
+      auto view = texture->createTextureView(RenderTextureViewDesc::Texture2D(RenderFormat::BC1_UNORM));
+      if (!view) return 0;
+      uint32_t descriptor = AllocDescriptor();
+      if (descriptor < kFirstTextureDescriptor) return 0;
+      r.bc1_buffer = std::move(buffer);
+      r.bc1_texture = std::move(texture);
+      r.bc1_view = std::move(view);
+      r.bc1_descriptor = descriptor;
+      texture_set->setTexture(descriptor, r.bc1_texture.get(), RenderTextureLayout::SHADER_READ, r.bc1_view.get());
+      bc1_alias_count++;
+    }
+    InvalidateDrawState();
+    list->setFramebuffer(nullptr);
+    bound_fb = nullptr;
+    Transition(list, r.texture.get(), RenderTextureLayout::COPY_SOURCE);
+    list->barriers(RenderBarrierStage::COPY, RenderBufferBarrier(r.bc1_buffer.get(), RenderBufferAccess::WRITE));
+    list->copyTextureRegion(RenderTextureCopyLocation::PlacedFootprint(r.bc1_buffer.get(), r.format,
+                                                                       16, 16, 1, kSourceRow, 0),
+                            RenderTextureCopyLocation::Subresource(r.texture.get()));
+    list->barriers(RenderBarrierStage::COPY, RenderBufferBarrier(r.bc1_buffer.get(), RenderBufferAccess::READ));
+    Transition(list, r.bc1_texture.get(), RenderTextureLayout::COPY_DEST);
+    list->copyTextureRegion(RenderTextureCopyLocation::Subresource(r.bc1_texture.get()),
+                            RenderTextureCopyLocation::PlacedFootprint(r.bc1_buffer.get(), RenderFormat::BC1_UNORM,
+                                                                       64, 64, 1, kBC1Row, 0));
+    Transition(list, r.bc1_texture.get(), RenderTextureLayout::SHADER_READ);
+    Transition(list, r.texture.get(), RenderTextureLayout::SHADER_READ);
+    r.bc1_serial = r.serial;
+    if (bc1_logged < 32) {
+      bc1_logged++;
+      REXLOG_INFO("[bc1-resolve] {:08X} serial {} src tile={} endian={} pitch={} dst tile={} endian={} pitch={} descriptor={}",
+                  address, r.serial, r.fetch_words[0] >> 31, (r.fetch_words[1] >> 6) & 3,
+                  ((r.fetch_words[0] >> 22) & 0x1FF) << 5, words[0] >> 31, (words[1] >> 6) & 3,
+                  ((words[0] >> 22) & 0x1FF) << 5, r.bc1_descriptor);
+    }
+    return r.bc1_descriptor;
+#else
+    return 0;
+#endif
+  }
+
   uint32_t TextureDescriptor(RenderCommandList* list, const uint32_t words[6], uint32_t* dimension) {
     uint32_t base = FetchBaseAddress(words);
     *dimension = 0;
@@ -2971,10 +3086,39 @@ struct Backend::Impl {
     uint32_t fetch_format = words[1] & 0x3F;
     if (ResolvedTexture* r = dim == 2 ? nullptr : LatestResolved(base & 0x1FFFFFFF, fetch_format == 22 || fetch_format == 23,
                                             (words[2] & 0x1FFF) + 1, ((words[2] >> 13) & 0x1FFF) + 1)) {
-      if (dim == 1 && !(words[0] >> 31) && (r->fetch_words[0] >> 31))
-        if (uint32_t untiled = LinearViewOfTiled(list, base & 0x1FFFFFFF, *r, words)) return untiled;
-      Transition(list, r->texture.get(), RenderTextureLayout::SHADER_READ);
-      return r->descriptor;
+      const uint32_t requested_width = (words[2] & 0x1FFF) + 1;
+      const uint32_t requested_height = ((words[2] >> 13) & 0x1FFF) + 1;
+      const uint32_t resolved_format = r->fetch_words[1] & 0x3F;
+
+      const bool reject_resolve =
+          REXCVAR_GET(gtav_native_strict_dxt1_resolve) &&
+          fetch_format == 18 &&
+          (resolved_format != fetch_format ||
+           r->width != requested_width ||
+           r->height != requested_height);
+
+      if (reject_resolve) {
+        if (uint32_t bc1 = TryBC1Resolve(list, base & 0x1FFFFFFF, *r, words)) return bc1;
+        static uint32_t rejected_logged = 0;
+
+        if (rejected_logged++ < 100) {
+          REXLOG_INFO(
+              "[texture-fix] rejected resolve {:08X}: "
+              "requested f{} {}x{}, resolved f{} {}x{}",
+              base & 0x1FFFFFFF,
+              fetch_format,
+              requested_width,
+              requested_height,
+              resolved_format,
+              r->width,
+              r->height);
+        }
+      } else {
+        if (dim == 1 && !(words[0] >> 31) && (r->fetch_words[0] >> 31))
+          if (uint32_t untiled = LinearViewOfTiled(list, base & 0x1FFFFFFF, *r, words)) return untiled;
+        Transition(list, r->texture.get(), RenderTextureLayout::SHADER_READ);
+        return r->descriptor;
+      }
     }
     uint64_t key = Hash(words, 24);
     auto& t = textures[key];
