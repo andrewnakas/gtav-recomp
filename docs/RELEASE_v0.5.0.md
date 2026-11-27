@@ -131,3 +131,28 @@ compiled there. What it changes for them, on top of the list below:
   Mac uploads `ios-shell-v0.5.0.tar` there (`docs/HANDOFF_MAC_2026-11-23.md`); then Linux can
   finish `gtav-recomp-linux-x64.tar.gz` (compat build at the release commit, package with the
   iOS shell, unattended install, scan).
+
+## `v0.5.0-macos` (Mac, 2026-11-27)
+
+The owner asked on 11-27 to ship the Mac package on its own (with the iPhone shell and the
+Android app in it), as `v0.5.0-macos` like `v0.5.0-android`: `Latest` stays on v0.3.0 and `main`
+does not move until Windows and Linux are ready. Text: `docs/RELEASE_NOTES_v0.5.0-macos.md`.
+
+- **Built from `max-perf` at 5c433f3** (the iPhone speed work of 11-27 included; the tag adds
+  documentation only) with `~/gtav05/rebuild_pkg5.sh` on the Mac: SDKs (mac-rel, ios-rel) as of
+  the patch, the release trees of `tools/release/build_release_macos.sh`, the iPhone shell
+  configured with `-DGTAV_D3D_PROBES=OFF` (its `interface/gtav_hooks.h` is 59 lines; the game
+  library `--iphone` builds must match it), MoltenVK iOS taken from the 11-26 shell (the WD drive
+  that held the xcframework failed).
+- **`ios-shell-v0.5.0.tar` on the draft is the one for every package** (SHA-256 in the draft's
+  text). Windows and Linux: download it and package with it; the iPhone builds of all three
+  must use the identical `ios/` folder. It replaces nothing published.
+- Checked: game started from the unzipped package, open world from a save, 45-57 fps hidden;
+  taint scan PASS (0 failing; the same short boilerplate runs as the 11-26 package);
+  `GTAV --iphone` from the package: 811 of 811 generated files match, 3,617 shaders, 0 failed,
+  ipa built. The unattended disc install was not run again (the disc images were on the failed
+  drive); the installer's Mac path has not changed since the 11-26 package, whose disc install
+  passed.
+- The taint scan needs about 3.5 GB of memory with its 64 MB chunks; on an 8 GB Mac under load
+  it was run with `CHUNK = 16 << 20` in a copy of `taint_scan.py` (chunks overlap by one window,
+  so the result does not depend on the chunk size).
