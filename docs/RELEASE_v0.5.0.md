@@ -211,6 +211,13 @@ the multi-wait refactor and the Apple wake-up of 8771bee; plus the packager with
   table of 16-bit counting numbers in `.lrodata`), `gtav_fast` 32 B (SPIR-V preamble),
   `clang++` 24 B, `gprlr_inline.h` 16 B. The APK inside is the one scanned unpacked on 11-23.
 - Uploaded to the draft `v0.5.0` from the 4050, downloaded again on the Mac: byte-identical.
+- **Repackaged the same evening with the player README of a17e4f4** (its Android section still
+  described the PC-built pack; all three READMEs fixed). Same binaries, only `README.txt` differs
+  (`diff -rq` against the first folder). New tarball 212,766,975 bytes, SHA-256
+  `ee5c82779917a92f069dadfbdc888f7466170f978b3c853f19ec4218c77d9ed4`; scanned again unpacked:
+  PASS, same findings. Replaced on the draft (`--clobber`), downloaded again: byte-identical. The
+  first tarball (`1a404cee…`) is kept on the 4050 as `dist/v0.5.0/gtav-recomp-linux-x64.16c88af*`.
+  The published Mac zip still has the old Android text in its README (its release notes are right).
 
 Left for 0.5.0: the Windows package (the 4050 rebooted into Windows: patch at 16c88af, SDK with
 `rexgluerd`, `gtav_fast.exe`, launcher, `make_release.py` with the draft's `ios-shell` and
