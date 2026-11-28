@@ -40,13 +40,14 @@ XR = REPO / "thirdparty" / "XenosRecomp"
 DXC = XR / "thirdparty" / "dxc-bin"
 STUB = REPO / "tools" / "release" / "lld_libxml2_stub"
 
+# The Tracy profiler stays out of player builds (issue #18; the SDK option defaults off since
+# f7707d5): a runtime that still needs libTracyClient.so fails check_needed below.
 # (source, destination below OUT_DIR, executable)
 FILES = [
     (LAUNCHER / "gtav_launcher", "gtav_launcher", True),
     (BUILD / "gtav_fast", "gtav_fast", True),
     (SDK_INSTALL / "lib" / "librexruntime.so", "librexruntime.so", True),
     (SDK_INSTALL / "lib" / "librexgpu-xenos.so", "librexgpu-xenos.so", True),
-    (SDK_INSTALL / "lib" / "libTracyClient.so", "libTracyClient.so", True),
     (SDK_INSTALL / "bin" / "rexglue", "rexglue", True),  # RUNPATH $ORIGIN finds librexruntime.so
     # Shader translation on the player's machine (shader_compiler.cpp). libdxil.so is not needed
     # for SPIR-V and stays out (as dxil.dll does on Windows).
@@ -112,7 +113,7 @@ SYSTEM_LIBS = {"libc.so.6", "libm.so.6", "libstdc++.so.6", "libgcc_s.so.1", "ld-
                "libdl.so.2", "libpthread.so.0", "librt.so.1", "libz.so.1", "libzstd.so.1",
                "libX11.so.6", "libX11-xcb.so.1", "libxcb.so.1", "libXau.so.6", "libXdmcp.so.6",
                "libwayland-client.so.0", "libffi.so.8"}
-PACKAGED_LIBS = {"librexruntime.so", "librexgpu-xenos.so", "libTracyClient.so", "libdxcompiler.so",
+PACKAGED_LIBS = {"librexruntime.so", "librexgpu-xenos.so", "libdxcompiler.so",
                  "libxml2.so.2", "gtav_game.so"}  # gtav_game.so: built by the installer
 
 
@@ -168,8 +169,8 @@ def main():
     # Built against the dev tree's dxc; in the release libdxcompiler.so is in tools/lib.
     set_runpath(out / "tools/XenosRecomp", "$ORIGIN/lib")
     # No debug info (it carries this machine's build paths), like the .pdb files left out on Windows.
-    ours = ["gtav_launcher", "gtav_fast", "librexruntime.so", "librexgpu-xenos.so", "libTracyClient.so",
-            "rexglue", "tools/XenosRecomp"]
+    ours = ["gtav_launcher", "gtav_fast", "librexruntime.so", "librexgpu-xenos.so", "rexglue",
+            "tools/XenosRecomp"]
     subprocess.run(["strip", "--strip-debug"] + [str(out / f) for f in ours], check=True)
 
     if a.ios:
