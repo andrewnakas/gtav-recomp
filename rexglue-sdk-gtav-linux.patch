@@ -2894,10 +2894,10 @@ index 5e0a932..cd75b74 100644
  
  bool& seh_active() {
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..36e66c1 100644
+index 9ac8d15..58167f2 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
-@@ -36,20 +36,24 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
+@@ -36,20 +36,26 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
  #include <unistd.h>
  
  #include <rex/assert.h>
@@ -2908,6 +2908,8 @@ index 9ac8d15..36e66c1 100644
  
  #include <sched.h>
 +#if defined(__APPLE__)
++#include <os/clock.h>
++#include <os/os_sync_wait_on_address.h>
 +#include <pthread/qos.h>
 +#endif
 +#include <string>
@@ -2925,7 +2927,7 @@ index 9ac8d15..36e66c1 100644
  // SIGEV_THREAD_ID in timer_create(...) is a Linux extension
  #define REX_HAS_SIGEV_THREAD_ID 1
  #ifdef __GLIBC__
-@@ -62,33 +66,39 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
+@@ -62,33 +68,50 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
  #define REX_HAS_SIGEV_THREAD_ID 0
  #endif
  
@@ -2950,6 +2952,17 @@ index 9ac8d15..36e66c1 100644
 +REXCVAR_DEFINE_BOOL(posix_alertable_sleep, true, "Kernel",
 +                    "Alertable waits sleep through the last partial millisecond of a timeout instead "
 +                    "of spinning on the clock (live)");
++// Waits on several handles: sleep until one of them is signalled (futex on Linux and Android,
++// os_sync_wait_on_address on macOS 14.4+ / iOS 17.4+) instead of polling every 1 ms. Off: the
++// 1 ms poll, as on older Apple systems.
++#if REX_PLATFORM_LINUX || defined(__APPLE__)
++#define REX_MULTI_WAIT_WAKE 1
++#else
++#define REX_MULTI_WAIT_WAKE 0
++#endif
++REXCVAR_DEFINE_BOOL(posix_multi_wait_wake, true, "Kernel",
++                    "Waits on several handles wake as soon as one is signalled instead of polling "
++                    "every 1 ms (live)");
 +
  namespace rex::thread {
  
@@ -2987,7 +3000,7 @@ index 9ac8d15..36e66c1 100644
  #endif
  
  template <typename _Rep, typename _Period>
-@@ -267,10 +277,35 @@ static sem_t* RexCreateAnonymousSemaphore() {
+@@ -267,10 +290,59 @@ static sem_t* RexCreateAnonymousSemaphore() {
  }
  #endif  // __APPLE__
  
@@ -2995,14 +3008,38 @@ index 9ac8d15..36e66c1 100644
 +// 1 ms sleeps: a guest thread waiting for any of a few events woke up to ~1 ms late, every time
 +// (GTA V's game threads do this every frame). Every signal now bumps this word and wakes the
 +// multi-waiters through a futex; they recheck at once. The 1 ms poll stays as the upper bound,
-+// so a signal path that does not notify is never worse than before.
-+#if REX_PLATFORM_LINUX
++// so a signal path that does not notify is never worse than before. Apple: the same with
++// os_sync_wait_on_address (macOS 14.4, iOS 17.4); older systems keep the poll.
++#if REX_MULTI_WAIT_WAKE
 +static std::atomic<uint32_t> multi_wait_epoch_{0};
 +static std::atomic<int32_t> multi_waiters_{0};
 +static inline void NotifyAllMultiWaiters() {
 +  multi_wait_epoch_.fetch_add(1, std::memory_order_seq_cst);
-+  if (multi_waiters_.load(std::memory_order_seq_cst) > 0)
++  if (multi_waiters_.load(std::memory_order_seq_cst) > 0) {
++#if REX_PLATFORM_LINUX
 +    syscall(SYS_futex, &multi_wait_epoch_, FUTEX_WAKE_PRIVATE, INT32_MAX, nullptr, nullptr, 0);
++#else
++    if (__builtin_available(macOS 14.4, iOS 17.4, *))
++      os_sync_wake_by_address_all(&multi_wait_epoch_, sizeof(uint32_t), OS_SYNC_WAKE_BY_ADDRESS_NONE);
++#endif
++  }
++}
++// Sleeps until the epoch is no longer `seen` or `ns` (1..1,000,000) have passed. False: this
++// system cannot (Apple before 14.4 / 17.4), and the caller polls instead.
++static inline bool WaitMultiWaitEpoch(uint32_t seen, long ns) {
++#if REX_PLATFORM_LINUX
++  timespec ts{0, ns};
++  syscall(SYS_futex, &multi_wait_epoch_, FUTEX_WAIT_PRIVATE, seen, &ts, nullptr, 0);
++  return true;
++#else
++  if (__builtin_available(macOS 14.4, iOS 17.4, *)) {
++    os_sync_wait_on_address_with_timeout(&multi_wait_epoch_, seen, sizeof(uint32_t),
++                                         OS_SYNC_WAIT_ON_ADDRESS_NONE, OS_CLOCK_MACH_ABSOLUTE_TIME,
++                                         uint64_t(ns));
++    return true;
++  }
++  return false;
++#endif
 +}
 +#else
 +static inline void NotifyAllMultiWaiters() {}
@@ -3024,7 +3061,7 @@ index 9ac8d15..36e66c1 100644
      // Use robust mutexes so waits can recover if owner thread terminates.
      pthread_mutexattr_t attr;
      if (pthread_mutexattr_init(&attr) == 0) {
-@@ -290,7 +325,7 @@ class PosixConditionBase {
+@@ -290,7 +362,7 @@ class PosixConditionBase {
    WaitResult Wait(std::chrono::milliseconds timeout) {
      bool executed;
      auto predicate = [this] { return this->signaled(); };
@@ -3033,11 +3070,11 @@ index 9ac8d15..36e66c1 100644
      auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
      int lock_result = pthread_mutex_lock(native_mutex);
      if (lock_result == EOWNERDEAD) {
-@@ -330,12 +365,28 @@ class PosixConditionBase {
+@@ -330,12 +402,28 @@ class PosixConditionBase {
        return std::make_pair(result, 0);
      }
  
-+#if REX_PLATFORM_LINUX
++#if REX_MULTI_WAIT_WAKE
 +    // Registered before the handles are checked: a signal from then on bumps the epoch.
 +    struct Registration {
 +      std::vector<PosixConditionBase*>& handles;
@@ -3055,14 +3092,14 @@ index 9ac8d15..36e66c1 100644
                          : start_time + timeout;
  
      while (true) {
-+#if REX_PLATFORM_LINUX
++#if REX_MULTI_WAIT_WAKE
 +      // Read before the handles are checked: a signal after the check changes it.
 +      uint32_t seen_epoch = multi_wait_epoch_.load(std::memory_order_seq_cst);
 +#endif
        size_t first_signaled = std::numeric_limits<size_t>::max();
        bool condition_met = false;
        bool all_locked = true;
-@@ -344,7 +395,7 @@ class PosixConditionBase {
+@@ -344,7 +432,7 @@ class PosixConditionBase {
        locks.reserve(handles.size());
  
        for (size_t i = 0; i < handles.size(); ++i) {
@@ -3071,35 +3108,29 @@ index 9ac8d15..36e66c1 100644
          auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
          int result = pthread_mutex_trylock(native_mutex);
          if (result == 0 || result == EOWNERDEAD) {
-@@ -411,6 +462,19 @@ class PosixConditionBase {
+@@ -411,6 +499,21 @@ class PosixConditionBase {
          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
        }
  
-+#if REX_PLATFORM_LINUX
-+      {
++#if REX_MULTI_WAIT_WAKE
++      if (REXCVAR_GET(posix_multi_wait_wake)) {
 +        auto remaining = end_time - now;
 +        auto wait = timeout == std::chrono::milliseconds::max()
 +                        ? std::chrono::nanoseconds(std::chrono::milliseconds(1))
 +                        : std::min<std::chrono::nanoseconds>(remaining, std::chrono::milliseconds(1));
-+        timespec ts{0, long(wait.count())};
++        const long ns = std::max<long>(1, long(wait.count()));
++        bool waited = true;
 +        multi_waiters_.fetch_add(1, std::memory_order_seq_cst);
 +        if (multi_wait_epoch_.load(std::memory_order_seq_cst) == seen_epoch)
-+          syscall(SYS_futex, &multi_wait_epoch_, FUTEX_WAIT_PRIVATE, seen_epoch, &ts, nullptr, 0);
++          waited = WaitMultiWaitEpoch(seen_epoch, ns);
 +        multi_waiters_.fetch_sub(1, std::memory_order_seq_cst);
++        if (waited) continue;
 +      }
-+#else
++#endif
        if (timeout == std::chrono::milliseconds::max()) {
          std::this_thread::sleep_for(std::chrono::milliseconds(1));
        } else {
-@@ -418,6 +482,7 @@ class PosixConditionBase {
-         auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
-         std::this_thread::sleep_for(sleep_time);
-       }
-+#endif
-     }
-   }
- 
-@@ -449,7 +514,15 @@ class PosixCondition<Event> : public PosixConditionBase {
+@@ -449,7 +552,15 @@ class PosixCondition<Event> : public PosixConditionBase {
    bool Signal() override {
      auto lock = std::unique_lock<std::mutex>(mutex_);
      signal_ = true;
@@ -3116,7 +3147,7 @@ index 9ac8d15..36e66c1 100644
      return true;
    }
  
-@@ -486,7 +559,13 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
+@@ -486,7 +597,13 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
        *out_previous_count = count_;
      }
      count_ += release_count;
@@ -3131,7 +3162,7 @@ index 9ac8d15..36e66c1 100644
      return true;
    }
  
-@@ -494,7 +573,8 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
+@@ -494,7 +611,8 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
    inline bool signaled() const override { return count_ > 0; }
    inline void post_execution() override {
      count_--;
@@ -3141,7 +3172,7 @@ index 9ac8d15..36e66c1 100644
    }
    uint32_t count_;
    const uint32_t maximum_count_;
-@@ -519,6 +599,7 @@ class PosixCondition<Mutant> : public PosixConditionBase {
+@@ -519,6 +637,7 @@ class PosixCondition<Mutant> : public PosixConditionBase {
        // Free to be acquired by another thread
        if (count_ == 0) {
          cond_.notify_all();
@@ -3149,7 +3180,7 @@ index 9ac8d15..36e66c1 100644
        }
        return true;
      }
-@@ -551,6 +632,7 @@ class PosixCondition<Timer> : public PosixConditionBase {
+@@ -551,6 +670,7 @@ class PosixCondition<Timer> : public PosixConditionBase {
      std::lock_guard<std::mutex> lock(mutex_);
      signal_ = true;
      cond_.notify_all();
@@ -3157,7 +3188,7 @@ index 9ac8d15..36e66c1 100644
      return true;
    }
  
-@@ -979,6 +1061,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
+@@ -979,6 +1099,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
        exit_code_ = exit_code;
        signaled_ = true;
        cond_.notify_all();
@@ -3165,7 +3196,7 @@ index 9ac8d15..36e66c1 100644
      }
      if (is_current_thread) {
        pthread_exit(reinterpret_cast<void*>(exit_code));
-@@ -1106,11 +1189,15 @@ std::chrono::milliseconds ComputeAlertableWaitTimeout(
+@@ -1106,11 +1227,15 @@ std::chrono::milliseconds ComputeAlertableWaitTimeout(
    if (deadline == std::chrono::steady_clock::time_point::max()) {
      return kAlertablePollSlice;
    }
@@ -3184,7 +3215,7 @@ index 9ac8d15..36e66c1 100644
    return std::min(remaining, kAlertablePollSlice);
  }
  
-@@ -1405,6 +1492,30 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
+@@ -1405,6 +1530,30 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
    }
  #endif
    set_current_thread_name("");
@@ -3215,7 +3246,7 @@ index 9ac8d15..36e66c1 100644
  
    auto start_data = static_cast<ThreadStartData*>(parameter);
    assert_not_null(start_data);
-@@ -1449,6 +1560,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
+@@ -1449,6 +1598,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
      thread->handle_.exit_code_ = 0;
      thread->handle_.signaled_ = true;
      thread->handle_.cond_.notify_all();

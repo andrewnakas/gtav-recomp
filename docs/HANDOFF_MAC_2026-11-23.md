@@ -508,3 +508,30 @@ line); `GTAV_NATIVE_SHOT_DIR` + `GTAV_SHOT_SECS` for screenshots; the log's memo
 the battery and a line with CPU by thread (`c435956`). `--gtav_native_pass_gpu_times` halves the
 frame rate while it is on: proportions only. Battery limits a night on a 5 W charger: the game
 drains about 1% a minute while charging.
+
+### 11-27 evening: Linux's waits ported to the Mac and the iPhone
+
+The owner asked whether the Mac and iPhone builds have every fix the Linux build has. Every
+issue fix does: no Linux branch, tag or local commit holds a commit that `max-perf` lacks, and no
+issue fix is behind a Linux-only `#if`. Three Linux/Android performance paths were not on Apple;
+two of them are now:
+
+- **Waits on several handles wake at once** (`posix_multi_wait_wake`, SDK `threading_posix.cpp`,
+  on by default, live). Linux and Android sleep on a futex that every signal of a watched handle
+  bumps; Apple polled every 1 ms, so a game thread waiting on a few events woke up to 1 ms late,
+  every frame. Apple now sleeps in `os_sync_wait_on_address` (macOS 14.4 / iOS 17.4; older
+  systems keep the poll; the iPhone build targets iOS 17.0 and links the calls weakly).
+  - M1 Air, package arguments, existing save, hidden, 16 same-run A/B report pairs in the world,
+    off | on: 58.1 | 58.6 fps (+1.0%, on ahead in 10 of 16), p90 20.1 | 19.4 ms, renderer CPU
+    6.84 | 6.28 ms a frame (lower in 16 of 16). The Mac is GPU-bound (16 ms a frame).
+  - iPhone 13 mini (`GTAV_mw_1127.ipa` = the 0.5.0 package's ipa with the new shell and runtime):
+    the first launch after the install recompiled the pipeline list for 190 s, and the owner
+    needed the phone 80 s after that, so only two clean pairs, both walking: 24.8 | 26.7 and
+    29.7 | 33.9 fps, p90 55.8 | 53.0 and 47.0 | 41.1 ms. 8.5 minutes, no crash; it ended with
+    "app in the background". To be measured again with a warm cache.
+- **Sleeping fence waits and no global lock on interlocked operations** are now on for the Mac too
+  (`gtav_fence_block_after_us=200`, `gtav_guest_irq_lock=0`; measured 11-24, table above:
+  +0.3% fps each, 4.6 -> 4.1 cores). Windows keeps the spin and the lock until measured.
+- Not ported: the write watch (`write_watch.cpp`: userfaultfd on Linux, page protection on Windows
+  and Android; Apple spot-checks textures instead), thread placement on hybrid Intel CPUs, and the
+  Linux crash backtrace.
