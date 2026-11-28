@@ -156,3 +156,23 @@ does not move until Windows and Linux are ready. Text: `docs/RELEASE_NOTES_v0.5.
 - The taint scan needs about 3.5 GB of memory with its 64 MB chunks; on an 8 GB Mac under load
   it was run with `CHUNK = 16 << 20` in a copy of `taint_scan.py` (chunks overlap by one window,
   so the result does not depend on the chunk size).
+
+### `v0.5.0-macos` files replaced (2026-11-27 evening)
+
+The owner chose to replace the published files instead of a 0.5.1 (5 downloads by then): the
+zip and the source archive were rebuilt from **`max-perf` at 483ffbe** (8771bee: waits on several
+handles wake through `os_sync_wait_on_address` on Apple; 483ffbe: Mac defaults
+`gtav_fence_block_after_us=200`, `gtav_guest_irq_lock=0`), and the tag moved to the commit that
+adds this entry. The first zip was SHA-256 `04e2be3e…cb9a3` (tag then at c7c64ac).
+
+- Same 1,392 files as the first zip; changed: `gtav_fast`, `librexruntime.dylib`, the iPhone
+  shell's `gtav` and `librexruntime.dylib`, the iPhone `Info.plist` (build time), signatures.
+  `android/GTAV.apk` unchanged.
+- **New `ios-shell-v0.5.0.tar`** (draft, replaces the first one): Windows and Linux package with
+  this one.
+- Checked: game from the unzipped package, open world from a save, 52-55 fps hidden; taint scan
+  PASS (same findings as the first zip); `GTAV --iphone` from the package: 811 of 811, 3,617
+  shaders, 0 failed. That ipa's `gtav_game.dylib` and shaders are byte-identical to the first
+  zip's; its runtime, GPU plugin and MoltenVK are identical (signatures and symbols removed) to
+  `GTAV_mw_1127.ipa`, the test build run on the 13 mini, and its `gtav` differs from that one only
+  by the version string (`v0.5.0-macos-2-g483ffbe` against `-dirty`).
