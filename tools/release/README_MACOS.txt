@@ -8,12 +8,13 @@ included.
 
 Do not share what you build
 ---------------------------
-Everything this package makes from your discs is Rockstar Games' copyrighted work: the game
-folder (data/), the recompiled game library (gtav_game.*), the generated C++, the translated
-shaders (data/spirv, shader_cache), and the GTAV.ipa and Android pack made by "Build for iPhone"
-and "Build for Android". They are for your own devices only. Never upload, share or link them,
-and never add them to a fork or a release. The GPL license of this project covers its own code
-only; it gives no one the right to share Rockstar's. Rules for forks and downstream releases:
+Everything this package makes from your discs is Rockstar Games' copyrighted work: the game folder
+(data/), the recompiled game library (gtav_game.*), the generated C++, the translated shaders
+(data/spirv, shader_cache), and the GTAV.ipa made by "Build for iPhone", and the game files and
+game library the Android app makes on your phone. They are for your own devices only. Never upload,
+share or link them, and never add them to a fork or a release. The GPL license of this project
+covers its own code only; it gives no one the right to share Rockstar's. Rules for forks and
+downstream releases:
 https://github.com/andrewnakas/gtav-recomp#keeping-it-clean-rules-for-forks-and-downstream-releases
 
 What you need
@@ -80,26 +81,29 @@ install the new GTAV.ipa over the old one (the game files on the phone stay).
 
 Android (experimental)
 ----------------------
-Play GTA V on an Android phone with a recent Snapdragon (tested: Galaxy S23 FE, Snapdragon 8 Gen 1)
-and about 40 GB free during setup. The app has no game in it: this Mac builds your game code for
-the phone once (about 15-25 minutes), and the phone installs the game files from your discs.
-1. Install and play the game on the Mac for a while first (the phone gets the shaders the Mac has
-   seen: drive around, go indoors).
-2. Hold Option while opening GTAV.app and press "Build for Android". Finder then shows the
-   game folder's android/ folder with GTAV.apk and gtav-android-pack.zip.
-3. Copy GTAV.apk, gtav-android-pack.zip, your Disc 1 ISO, Disc 2 ISO and the TU file to the phone
-   (for example its Download folder; Android File Transfer or a USB stick).
-4. On the phone, open GTAV.apk to install it (allow installing apps from that source).
-5. Open GTA V, choose the four files and press Install. It copies and checks about 16 GB, then
-   starts the game. Keep the app open while it installs. The disc images and the pack can be
-   deleted afterwards.
-Objects missing on the phone? Copy the phone's Android/data/com.gtavrecomp.app/files/shader_cache
-folder to <game folder>/android/shader_cache, press "Build for Android" again (a few minutes) and
-choose the new pack on the phone (long-press the app icon, "Run setup again"); the game files stay. A newer GTAV.apk needs a new pack (the app
-says so).
+Play GTA V on an Android phone: arm64, Android 11 or newer, Vulkan 1.1, Snapdragon 845 or newer
+(tested: Galaxy S23 FE). The app has no game in it. It sets the game up on the phone by itself,
+the way this package does here: it copies and checks your disc files, recompiles the game and
+compiles it on the phone. Nothing is built for Android on this computer any more.
+1. Copy GTAV.apk to the phone and open it there to install it (allow installing apps from that
+   source). It is inside the app: right-click GTAV.app > Show Package Contents >
+   Contents/Resources/gtav/android/GTAV.apk (the same file as the v0.5.0-android release).
+2. Copy your Disc 1 ISO, Disc 2 ISO and the TU file to the phone (for example its Download
+   folder). Setup needs about 40 GB free; the disc images can be deleted afterwards.
+3. Open GTA V, choose the three files and press Install. Keep the phone plugged in: the build
+   takes about 15 minutes on the S23 FE, longer on slower phones. The game starts when it is
+   done; shaders are translated while you play, so the first minutes are slower.
+Already set up here? Open the app once, copy the game, update and user folders from the game
+folder's data/ to the phone's Android/data/com.gtavrecomp.app/files/data by USB and press Install
+without choosing anything: about 16 GB on the phone instead of about 40.
+Updating from 0.3.0: install the new GTAV.apk over the old app and press Install once; the game
+files and saves stay. The Android pack from the PC is no longer used.
+Known issues on Android: the phone heats up in sustained play and the frame rate drops with it
+(S23 FE: about 45-50 fps while cool, about 30 once hot); the touch controls are basic (a
+controller works better).
 
-Everything made from your files stays in the game folder (data/, gtav_game.dylib, iphone/GTAV.ipa
-and android/gtav-android-pack.zip). Do not share any of it: it contains Rockstar Games' copyrighted
+Everything made from your files stays in the game folder (data/, gtav_game.dylib and
+iphone/GTAV.ipa) and on your phone. Do not share any of it: it contains Rockstar Games' copyrighted
 work. (GTAV.apk as downloaded holds no game and is fine to share.) To uninstall, delete GTAV.app and the game folder.
 
 This project is free software under the GNU GPL, version 3 or later (LICENSES/gtav-recomp-GPL-3.0.txt).
