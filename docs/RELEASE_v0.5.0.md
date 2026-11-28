@@ -176,3 +176,43 @@ adds this entry. The first zip was SHA-256 `04e2be3e…cb9a3` (tag then at c7c64
   zip's; its runtime, GPU plugin and MoltenVK are identical (signatures and symbols removed) to
   `GTAV_mw_1127.ipa`, the test build run on the 13 mini, and its `gtav` differs from that one only
   by the version string (`v0.5.0-macos-2-g483ffbe` against `-dirty`).
+
+## Linux package (2026-11-27 evening, on the draft)
+
+`gtav-recomp-linux-x64.tar.gz`, built on the 4050 from **`max-perf` at 16c88af** (483ffbe's code:
+the multi-wait refactor and the Apple wake-up of 8771bee; plus the packager without
+`libTracyClient.so`, issue #18). 212,766,448 bytes, SHA-256
+`1a404cee0db7f3886cea4f25e7cd4c29c7c6cf0bbcd1230eac97b105814765fb`; 811 files, 623 MB unpacked.
+
+- Compat container build (`tools/release/compat/build.sh`). The first try failed to link `rexglue`:
+  the SDK's static libraries in `out/linux-amd64/Release` (SDL3, glslang) had been built natively
+  on 11-17 against glibc 2.39 (`__isoc23_strtol` and friends) and the container's ninja took them
+  as current. Moved aside (`~/gtav-logs/native_a_1127`) and rebuilt in the container. Floors after:
+  GLIBC 2.35 / GLIBCXX 3.4.32 for every shipped binary (XenosRecomp unchanged since 11-11).
+- Packaged with `--compat --llvm build/llvm-19.1.5-rel` (official LLVM 19.1.5), `--ios
+  dist/v0.5.0/ios` (the draft's `ios-shell-v0.5.0.tar`, `5c8eb910…`; the package's `ios/` is
+  identical to it) and `--android dist/v0.5.0/android` (`GTAV.apk` 0856e2fc…, unchanged).
+  `--licenses` needs a folder with `LLVM.txt`, `DirectXShaderCompiler.txt` and
+  `third_party/GPL-3.0.txt` (`dist/v0.5.0/licenses`, made from the android LICENSES + the repo's
+  LICENSE).
+- Unattended install from the unpacked tarball (Toshiba, `gtav-install-0500`, disc images and TU27
+  from `gtav-rex/game`, `GTAV_JOBS=4` on a busy machine): copy and check, codegen, "Generated code
+  matches the reference build (811 files)", 407 files compiled, `gtav_game.so` linked, exit 0
+  (42 minutes, 18:21-19:03).
+- Boot from that install through the launcher, hidden and muted, A pressed for the first 4
+  minutes (no save on a fresh install): the new game's prologue reached, picture checked on
+  screenshots, 60-100 fps in the prologue on the RTX 4050 laptop while other work ran
+  on it. Log: only the known stub and long-wait lines.
+- Taint scan (`scan_release.sh`) of the tarball unpacked again, against the TU27 image,
+  `default.xexp`, `update.rpf`, the generated code of this manifest (811/811 against
+  `expected.txt`, copied from the Mac to `~/gtav-e2e-linux-cg/generated/default`), the repo's
+  shader and census outputs, and the test install's `data/spirv` and `data/shader_cache`: **PASS,
+  0 failing**. Short runs only: `rexglue` 112 B (codegen templates), `librexruntime.so` 72 B (a
+  table of 16-bit counting numbers in `.lrodata`), `gtav_fast` 32 B (SPIR-V preamble),
+  `clang++` 24 B, `gprlr_inline.h` 16 B. The APK inside is the one scanned unpacked on 11-23.
+- Uploaded to the draft `v0.5.0` from the 4050, downloaded again on the Mac: byte-identical.
+
+Left for 0.5.0: the Windows package (the 4050 rebooted into Windows: patch at 16c88af, SDK with
+`rexgluerd`, `gtav_fast.exe`, launcher, `make_release.py` with the draft's `ios-shell` and
+`android` tars, unattended install, `scan_release.cmd`), then the source archive and the final
+notes (`RELEASE_NOTES_v0.5.0.md`).
