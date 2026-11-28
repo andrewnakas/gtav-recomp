@@ -1,3 +1,8 @@
+> **Merged into [v0.5.0](https://github.com/andrewnakas/gtav-recomp/releases/tag/v0.5.0) on 2026-11-28**
+> (owner: one release for all 0.5 packages). `GTAV.apk` there is the same file; this text is kept
+> as the record of what this separate release said. Links below to the separate release pages
+> no longer lead to downloads.
+
 **GTA V on Android from your own Xbox 360 copy: the app now sets the game up on the phone itself.**
 
 This release is the **Android app only**. The Windows, Linux, Mac and iPhone packages of 0.5.0 are

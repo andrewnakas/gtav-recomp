@@ -223,3 +223,67 @@ Left for 0.5.0: the Windows package (the 4050 rebooted into Windows: patch at 16
 `rexgluerd`, `gtav_fast.exe`, launcher, `make_release.py` with the draft's `ios-shell` and
 `android` tars, unattended install, `scan_release.cmd`), then the source archive and the final
 notes (`RELEASE_NOTES_v0.5.0.md`).
+
+## One release: `v0.5.0` (owner, 2026-11-27 night; Linux session on the 4050)
+
+The owner asked on 11-27 (after the Mac shipped `v0.5.0-macos` and the iPhone shell) to get Linux
+onto 0.5 with the iPhone shell and to squash the 0.5 releases into one. The Linux tarball was
+already on the draft (section above). Added here:
+
+- **Tarball checked again:** the draft's `gtav-recomp-linux-x64.tar.gz` (GitHub digest
+  `ee5c8277…`) is the local file; unpacked it equals `dist/v0.5.0/gtav-recomp-linux-x64`
+  (811 files), its `ios/` equals the draft's `ios-shell-v0.5.0.tar` (`5c8eb910…`) and its
+  `android/GTAV.apk` is `0856e2fc…`. The test install on the Toshiba differs from it only in
+  `README.txt` (and what the install made).
+- **Build for iPhone from the Linux package with the new shell** (`GTAV_JOBS=4 ./gtav_launcher
+  --iphone` in the test install, 23:14-23:38, 24 minutes on a loaded machine): codegen, "Generated
+  code matches the reference build (811 files)", 406 files compiled in 525 s, `gtav_game.dylib`
+  linked (84 MB, arm64 Mach-O), 3,617 shaders translated, 0 failed, `iphone/GTAV.ipa` 162 MB
+  (3,678 files). The app's `gtav`, `librexruntime.dylib`, `librexgpu-xenos.dylib`,
+  `libMoltenVK.dylib` and `Info.plist` are the shell's files byte for byte. Of the game library's
+  366 imports (llvm-nm), 362 are exported by those three shell binaries; the other four are
+  libSystem's (`bzero`, `memcpy`, `log2f`, `dyld_stub_binder`). Not run on a phone here: the Mac
+  ran its own build of the same shell.
+- **Open world from an old save** (the "copy your old `data/user`" update path): the dev
+  install's save folder copied into the test install's `data/user`, the game started through the
+  launcher, hidden and muted. Save loaded, open world at Vespucci Beach, picture checked on
+  screenshots, 8.5 minutes, log: only the known `gamecache:\data\gta5_cache_x.dat` line.
+  Frame rate: 500+ fps in the loading screens, then stretches of about 90 fps (86 of 145 reports,
+  about 2,100 draws a frame) and stretches of about 25 fps. The slow stretches are the machine:
+  load average 24-37 from other sessions with the game at nice 10 (`memgate`); the dev build of
+  51d0fea run the same way right after gave a median of 25 fps with the same signs (20-30
+  thousand fence-copied draws and 1-2 s of guest waiting per 300 frames). No clean frame-rate
+  number for Linux from this night.
+- **Android issues filed against the published APK**, listed as known issues in the notes and
+  not fixed: #48 (Galaxy S22, Android 14: the on-phone link stops with "Pointer tag was
+  truncated") and #59 (Mali-G615: no `vertexPipelineStoresAndAtomics`, the renderer refuses the
+  device).
+
+### What `v0.5.0` holds
+
+Tag `v0.5.0` on `max-perf` (documentation only after a17e4f4). Assets:
+
+- `gtav-recomp-linux-x64.tar.gz` (`ee5c8277…`, built at 16c88af, README of a17e4f4)
+- `gtav-recomp-macos-arm64.zip` (`1af843a4…`, built at 483ffbe; the file of `v0.5.0-macos`)
+- `GTAV.apk` (`0856e2fc…`, built at 51d0fea; the file of `v0.5.0-android`)
+- `gtav-recomp-src-v0.5.0.tar.xz`: source at the tag. Since the Mac's tag (6eb66e7 = 483ffbe's
+  code) only the Linux packager, the player READMEs and documentation changed, so it is the
+  source of the Linux tarball and the Mac zip.
+- `gtav-recomp-src-v0.5.0-android.tar.xz` (`f0b17693…`, unchanged): the source of the APK, whose
+  code is older (51d0fea).
+
+The exchange files `android-v0.5.0.tar` and `ios-shell-v0.5.0.tar` are not in the published
+release. Copies for the Windows build: `gtav-0.5.0-windows-inputs/` on the Toshiba drive (exFAT,
+readable from Windows; SHA-256 `736d3ff3…` and `5c8eb910…`), and the same two folders are
+`android/` and `ios/` inside the Linux tarball.
+
+The separate releases `v0.5.0-android` and `v0.5.0-macos` are removed (their git tags stay: the
+build sheet and the source archives name them). Text: `docs/RELEASE_NOTES_v0.5.0.md`; the two
+older notes files are kept with a line on top. `Latest` stays on v0.3.0 and `main` does not move
+while there is no Windows package of 0.5.0 (the owner can move both).
+
+**Windows, still to do** (the 4050 in Windows, on the owner's go): patch at 16c88af or later, SDK
+with `rexgluerd`, `gtav_fast.exe`, launcher, `make_release.py` with the `ios` and `android`
+folders above, unattended install, `scan_release.cmd`; then upload
+`gtav-recomp-windows-x64.zip` to the published `v0.5.0`, add it to the notes (table, checks,
+checksum, the Windows lines of the earlier draft of the notes at 7c881e2), and move `Latest`.

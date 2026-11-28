@@ -1,3 +1,8 @@
+> **Merged into [v0.5.0](https://github.com/andrewnakas/gtav-recomp/releases/tag/v0.5.0) on 2026-11-28**
+> (owner: one release for all 0.5 packages). `gtav-recomp-macos-arm64.zip` there is the same file; this text is kept
+> as the record of what this separate release said. Links below to the separate release pages
+> no longer lead to downloads.
+
 **GTA V on a Mac, iPhone and Android, from your own Xbox 360 copy: 0.5.0 for macOS.**
 
 This release is the **Mac package**: one download that installs the game on your Mac and also
