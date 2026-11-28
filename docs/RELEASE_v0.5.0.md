@@ -287,3 +287,33 @@ with `rexgluerd`, `gtav_fast.exe`, launcher, `make_release.py` with the `ios` an
 folders above, unattended install, `scan_release.cmd`; then upload
 `gtav-recomp-windows-x64.zip` to the published `v0.5.0`, add it to the notes (table, checks,
 checksum, the Windows lines of the earlier draft of the notes at 7c881e2), and move `Latest`.
+
+### Published (2026-11-28 00:04 local)
+
+https://github.com/andrewnakas/gtav-recomp/releases/tag/v0.5.0, title "v0.5.0: Linux, Mac, iPhone
+and Android", tag `v0.5.0` at 24a19cc, not marked `Latest` (v0.3.0 keeps it), `main` not moved.
+The draft that served as the exchange point became this release. Assets as GitHub reports them
+(size, SHA-256), each download link answering:
+
+```
+212766975  ee5c82779917a92f069dadfbdc888f7466170f978b3c853f19ec4218c77d9ed4  gtav-recomp-linux-x64.tar.gz
+195470178  1af843a4f5ac5cab9d50181ba98414534d9b9c5548bfb63fd8e26468476f2cd6  gtav-recomp-macos-arm64.zip
+180475225  0856e2fc8cfebc610b1af0ed52d3f3f9fe7ce3180ee8184de58cb6b7adfbe615  GTAV.apk
+134023140  5148dfbfbfdef2740dd7723980e056309f332d74dac5ab20b6f60c96fe1d15e0  gtav-recomp-src-v0.5.0.tar.xz
+133980288  f0b17693a2d4e19db1f0dad0f5e18281e8c4ad0fd9aa95cfe44aaedf9ce1cc9e  gtav-recomp-src-v0.5.0-android.tar.xz
+```
+
+- `gtav-recomp-src-v0.5.0.tar.xz` (`make_source_archive.sh` at the tag, SDK f5337cd,
+  XenosRecomp 990d03b, plume 0ce184b): the same file list as the Android archive plus one notes
+  file. Compared file by file with the Mac release's `gtav-recomp-src-v0.5.0-macos.tar.xz`
+  (`fdaa8ed8…`, downloaded before that release was removed): the same 22,831 files (the Mac's
+  archive also holds one `._` metadata entry per file), 9 of them different: `SOURCE.txt`, four
+  documentation files, the three player READMEs and `make_release_linux.py`. So it is the source
+  of the Mac zip too.
+- Removed after `v0.5.0` was checked: the releases `v0.5.0-android` (APK 1,511 downloads, source
+  377) and `v0.5.0-macos` (zip 32, source 12). Their tags stay, so the old page links show a bare
+  tag page; the old direct download links (`…/download/v0.5.0-android/GTAV.apk`) no longer work.
+  Their published texts are `docs/RELEASE_NOTES_v0.5.0-android.md` and `-macos.md`.
+- The test install on the Toshiba (`gtav-install-0500`) now also holds `iphone/` (the ipa built
+  here) and the dev save in `data/user/B13EBABEBABEBABE`.
+
