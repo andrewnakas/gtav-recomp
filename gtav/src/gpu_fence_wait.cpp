@@ -47,11 +47,9 @@ REXCVAR_DECLARE(bool, gtav_wait_profile);
 // 97% -> 41% of a core; on the phone 21-47 -> 16-17 M instructions a frame.
 // On for Linux and Android (measured there) and the iPhone (13 mini 11-27, same-run A/B spin |
 // sleep after 200 us: standing 40.9 | 42.4 fps, both report lines; scripted run 25.2 | 25.6 with
-// recording 18.1 | 14.8 ms); the other platforms keep the spin until tested.
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-#if defined(__linux__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+// recording 18.1 | 14.8 ms) and the Mac (M1 Air 11-24, 9 A/B reports: +0.3% fps, 4.6 -> 4.1 cores);
+// Windows keeps the spin until tested.
+#if defined(__linux__) || defined(__APPLE__)
 #define GTAV_FENCE_BLOCK_DEFAULT 200
 #else
 #define GTAV_FENCE_BLOCK_DEFAULT -1

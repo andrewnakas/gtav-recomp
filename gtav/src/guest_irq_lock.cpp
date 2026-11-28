@@ -32,13 +32,11 @@
 
 #include "guest_irq_lock.h"
 
-// Measured on Linux, Android and the iPhone (max-perf line): the other platforms keep the lock.
+// Measured on Linux, Android, the iPhone and the Mac (max-perf line): Windows keeps the lock.
+// M1 Air 11-24, 9 A/B reports lock | no lock: +0.3% fps (48-58 fps both sides).
 // iPhone 13 mini 11-27, same-run A/B lock | no lock: standing 40.3 | 41.7 fps (both report lines),
 // scripted run 22.1 | 22.4.
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-#if defined(__linux__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+#if defined(__linux__) || defined(__APPLE__)
 #define GTAV_GUEST_IRQ_LOCK_DEFAULT 0
 #else
 #define GTAV_GUEST_IRQ_LOCK_DEFAULT 1
